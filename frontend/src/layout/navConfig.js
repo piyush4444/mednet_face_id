@@ -32,8 +32,7 @@ export const NAV_GROUPS = [
   {
     label: "Administration",
     items: [
-      { key: "facilities", label: "Facilities", path: "/facilities", icon: "facility", perm: "facilities.manage" },
-      { key: "locations", label: "Locations", path: "/locations", icon: "location", perm: "facilities.manage" },
+      { key: "locations", label: "Locations", path: "/locations", icon: "location", perm: "locations.manage" },
       { key: "cameras", label: "Cameras", path: "/cameras", icon: "camera", perm: "cameras.manage" },
       { key: "frontdesk-admin", label: "Departments & Rooms", path: "/frontdesk-admin", icon: "departments", perm: "frontdesk_admin.manage" },
     ],

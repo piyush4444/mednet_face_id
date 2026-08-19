@@ -25,12 +25,13 @@ async def _ws_authorized(websocket: WebSocket) -> bool:
     if not settings.AUTH_ENABLED:
         return True
     token = websocket.cookies.get(settings.SESSION_COOKIE_NAME)
-    account_id = auth_service.read_session_token(token or "")
-    if account_id is None:
+    session = auth_service.read_session_token(token or "")
+    if session is None:
         return False
+    kind, principal_id = session
     db = SessionLocal()
     try:
-        acct = auth_service.get_account(db, account_id)
+        acct = auth_service.get_account(db, principal_id, kind)
         if acct is None or not acct.is_active:
             return False
         return auth_service.has_permission(acct, Permission.TRACKING_READ, db)

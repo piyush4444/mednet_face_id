@@ -7,7 +7,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "react-toastify";
 import { API_URL } from "../config";
-import { listFacilities } from "../api/facilities";
 import {
   listDevices, createDevice, patchDevice, deleteDevice, provisionAccount,
   listActivity, listPreregs, listExports, retryPrereg, retryExport,
@@ -104,11 +103,10 @@ function Overview() {
 }
 
 // ── Devices ──────────────────────────────────────────────────────────────
-const EMPTY_DEVICE = { serial: "", name: "", facility_id: "", mode: "AUTO", source_type: "webcam", camera_id: "", dup_window: "" };
+const EMPTY_DEVICE = { serial: "", name: "", mode: "AUTO", source_type: "webcam", camera_id: "", dup_window: "" };
 
 function Devices() {
   const [devices, setDevices] = useState([]);
-  const [facilities, setFacilities] = useState([]);
   const [cameras, setCameras] = useState([]);
   const [form, setForm] = useState(EMPTY_DEVICE);
   const [acctFor, setAcctFor] = useState(null); // device id being provisioned
@@ -121,7 +119,6 @@ function Devices() {
   useEffect(() => {
     reload();
     (async () => {
-      try { setFacilities((await listFacilities()).facilities || []); } catch { /* */ }
       try {
         const res = await fetch(`${API_URL}/cameras`, { credentials: "include", headers: { "ngrok-skip-browser-warning": "true" } });
         if (res.ok) setCameras(await res.json());
@@ -129,14 +126,11 @@ function Devices() {
     })();
   }, [reload]);
 
-  const facName = (id) => facilities.find((f) => f.id === id)?.display_name || "—";
-
   const submit = async () => {
     if (!form.serial.trim() || !form.name.trim()) return toast.error("Serial and name are required");
     try {
       await createDevice({
         serial: form.serial.trim(), name: form.name.trim(),
-        facility_id: form.facility_id ? Number(form.facility_id) : null,
         mode: form.mode, source_type: form.source_type,
         camera_id: form.source_type === "system" ? (form.camera_id || null) : null,
         dup_window: form.dup_window ? Number(form.dup_window) : null,
@@ -166,11 +160,6 @@ function Devices() {
             onChange={(e) => setForm({ ...form, serial: e.target.value })} />
           <input className={field} placeholder="Name (Main Gate)" value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <select className={field} value={form.facility_id}
-            onChange={(e) => setForm({ ...form, facility_id: e.target.value })}>
-            <option value="">Facility…</option>
-            {facilities.map((f) => <option key={f.id} value={f.id}>{f.display_name}</option>)}
-          </select>
           <select className={field} value={form.mode}
             onChange={(e) => setForm({ ...form, mode: e.target.value })}>
             <option value="AUTO">Mode: Automatic</option>
@@ -203,7 +192,6 @@ function Devices() {
           <thead>
             <tr className="text-left text-xs text-text-muted border-b border-primary/8">
               <th className="py-2.5 px-4 font-semibold">Kiosk</th>
-              <th className="py-2.5 px-3 font-semibold">Facility</th>
               <th className="py-2.5 px-3 font-semibold">Mode</th>
               <th className="py-2.5 px-3 font-semibold">Source</th>
               <th className="py-2.5 px-3 font-semibold">Login</th>
@@ -218,7 +206,6 @@ function Devices() {
                   <div className="font-bold text-text-main">{d.name}</div>
                   <div className="text-[11px] text-text-muted font-mono">{d.serial}{d.is_active ? "" : " · inactive"}</div>
                 </td>
-                <td className="py-2.5 px-3 text-text-muted">{d.facility_name || facName(d.facility_id)}</td>
                 <td className="py-2.5 px-3 text-text-muted">{d.mode}</td>
                 <td className="py-2.5 px-3 text-text-muted">{d.source_type === "system" ? `cam:${d.camera_id || "?"}` : "webcam"}</td>
                 <td className="py-2.5 px-3">
@@ -236,7 +223,7 @@ function Devices() {
               </tr>
             ))}
             {devices.length === 0 && (
-              <tr><td colSpan={7} className="py-8 text-center text-text-muted">No kiosks registered yet.</td></tr>
+              <tr><td colSpan={6} className="py-8 text-center text-text-muted">No kiosks registered yet.</td></tr>
             )}
           </tbody>
         </table>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "react-toastify";
 import { API_URL as API } from "../config";
 import { useSocketMessages } from "../hooks/useSocket";
-import { listFacilities, listLocations } from "../api/facilities";
+import { listLocations } from "../api/facility";
 
 /**
  * Cameras admin page.
@@ -49,13 +49,11 @@ const EMPTY_FORM = {
   floor: "floor_1",
   role: "inside",
   active: true,
-  facility_id: "",
   location_id: "",
 };
 
 export default function Cameras() {
   const [cameras, setCameras] = useState([]);
-  const [facilities, setFacilities] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -134,13 +132,11 @@ export default function Cameras() {
     [cameras],
   );
 
-  // Facility + location lists for the placement dropdowns. Best-effort:
-  // if the account can't read them the selects just stay empty.
+  // Location list for the optional placement dropdown.
   useEffect(() => {
     (async () => {
       try {
-        const [f, l] = await Promise.all([listFacilities(), listLocations()]);
-        setFacilities(f.facilities || []);
+        const l = await listLocations();
         setLocations(l.locations || []);
       } catch {
         /* not permitted / none — placement selects hide their options */
@@ -148,10 +144,6 @@ export default function Cameras() {
     })();
   }, []);
 
-  const facilityName = useCallback(
-    (id) => facilities.find((f) => f.id === id)?.display_name || null,
-    [facilities],
-  );
   const locationName = useCallback(
     (id) => locations.find((l) => l.id === id)?.name || null,
     [locations],
@@ -173,7 +165,6 @@ export default function Cameras() {
         floor: cam.floor || "floor_1",
         role: cam.role || "inside",
         active: cam.active !== false,
-        facility_id: cam.facility_id ?? "",
         location_id: cam.location_id ?? "",
       },
     });
@@ -229,9 +220,8 @@ export default function Cameras() {
         : `${API}/cameras/${modal.cameraId}`;
       const method = isCreate ? "POST" : "PATCH";
 
-      // Coerce the placement selects: "" → null, else a number.
+      // Coerce the location select: "" → null, else a number.
       const placement = {
-        facility_id: modal.form.facility_id === "" ? null : Number(modal.form.facility_id),
         location_id: modal.form.location_id === "" ? null : Number(modal.form.location_id),
       };
       const body = isCreate
@@ -396,7 +386,6 @@ export default function Cameras() {
                       {locationName(cam.location_id) && (
                         <span className="text-[10px] font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
                           📍 {locationName(cam.location_id)}
-                          {facilityName(cam.facility_id) ? ` · ${facilityName(cam.facility_id)}` : ""}
                         </span>
                       )}
                     </div>
@@ -458,7 +447,6 @@ export default function Cameras() {
           testing={testing}
           testResult={testResult}
           submitting={submitting}
-          facilities={facilities}
           locations={locations}
         />
       )}
@@ -476,7 +464,6 @@ function CameraFormModal({
   testing,
   testResult,
   submitting,
-  facilities,
   locations,
 }) {
   const isEdit = mode === "edit";
@@ -578,36 +565,19 @@ function CameraFormModal({
             </Field>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Facility (optional)">
-              <select
-                value={form.facility_id}
-                onChange={(e) =>
-                  updateForm({ facility_id: e.target.value, location_id: "" })}
-                className="w-full px-3 py-2 rounded-lg border border-primary/10 focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none text-sm bg-card"
-              >
-                <option value="">—</option>
-                {facilities.map((f) => (
-                  <option key={f.id} value={f.id}>{f.display_name}</option>
-                ))}
-              </select>
-            </Field>
+          <div>
             <Field label="Location (optional)">
               <select
                 value={form.location_id}
                 onChange={(e) => updateForm({ location_id: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-primary/10 focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none text-sm bg-card disabled:opacity-50"
-                disabled={!form.facility_id}
+                className="w-full px-3 py-2 rounded-lg border border-primary/10 focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none text-sm bg-card"
               >
                 <option value="">—</option>
-                {locations
-                  .filter((l) =>
-                    !form.facility_id || String(l.facility_id) === String(form.facility_id))
-                  .map((l) => (
+                {locations.map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.name} ({l.location_type})
                     </option>
-                  ))}
+                ))}
               </select>
             </Field>
           </div>

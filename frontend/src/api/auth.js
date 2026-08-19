@@ -53,11 +53,15 @@ export async function listAccounts() {
   return jsonOrThrow(await fetch(`${API_URL}/auth/accounts`));
 }
 
-export async function createAccount({ username, password, role }) {
+export async function listAccessCandidates() {
+  return jsonOrThrow(await fetch(`${API_URL}/auth/accounts/candidates`));
+}
+
+export async function createAccount({ userId, username, password, role }) {
   const res = await fetch(`${API_URL}/auth/accounts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, role }),
+    body: JSON.stringify({ user_id: Number(userId), username, password, role }),
   });
   return jsonOrThrow(res);
 }

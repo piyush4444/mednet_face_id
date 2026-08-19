@@ -1,10 +1,10 @@
 """
 mapping_service.py — manage person × facility mappings (PERSON_VISIT_MAPPING).
 
-This is where the centralized-identity model is administered: what a person
-*is* is per-facility (PATIENT at one hospital, EMPLOYEE at another), and the
-same person can be mapped to several facilities without re-registering. Each
-mapping also carries the per-facility MRN and the running visit counter.
+This is where the centralized-identity model is administered. The
+person-to-facility row remains an internal lifecycle record for the singleton
+deployment and stores operational person type, facility-issued MRN, and the
+running visit counter.
 
 Reads need ``users.read``; writes need ``users.write`` (guarded at the
 router). MRN is unique per facility (partial index); duplicate (person,

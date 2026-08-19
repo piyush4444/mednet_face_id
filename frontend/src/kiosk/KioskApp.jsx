@@ -119,8 +119,8 @@ async function apiPrereg(payload) {
   return jsonOrThrow(res);
 }
 
-async function apiNewMrn(facilityId) {
-  const res = await fetch(`${API_URL}/kiosk/mrn/new?facility_id=${facilityId}`, {
+async function apiNewMrn() {
+  const res = await fetch(`${API_URL}/kiosk/mrn/new`, {
     credentials: "include",
     headers: baseHeaders(false),
   });
@@ -139,7 +139,7 @@ async function apiKioskConfig(serial) {
 }
 
 // Minimal facility + camera lists for setup — served under kiosk.operate so
-// the device account never needs the admin-tier /facilities or /cameras APIs.
+// the device account never needs admin-tier facility or camera APIs.
 async function apiSetupOptions() {
   const res = await fetch(`${API_URL}/kiosk/setup-options`, {
     credentials: "include",
@@ -364,7 +364,7 @@ function SetupScreen({ onDone, onAuthError }) {
   const [deviceId, setDeviceId] = useState("");
   const [systemCameras, setSystemCameras] = useState([]);
   const [systemCameraId, setSystemCameraId] = useState("");
-  const [facilities, setFacilities] = useState([]);
+  const [facility, setFacility] = useState(null);
   const [facilityId, setFacilityId] = useState("");
   // AUTO = one kiosk handles both directions (in & out), resolved per person
   // from their last punch. IN/OUT lock a one-way gate.
@@ -372,15 +372,15 @@ function SetupScreen({ onDone, onAuthError }) {
   const [serial, setSerial] = useState("");
   const [error, setError] = useState("");
 
-  // Facilities + registered system cameras via the kiosk-scoped endpoint
+  // Singleton facility + registered cameras via the kiosk-scoped endpoint
   // (no admin-tier reads, no camera permission needed).
   useEffect(() => {
     (async () => {
       try {
         const opts = await apiSetupOptions();
-        const facs = opts.facilities || [];
-        setFacilities(facs);
-        if (facs[0]) setFacilityId(String(facs[0].id));
+        const fac = opts.facility || null;
+        setFacility(fac);
+        if (fac) setFacilityId(String(fac.id));
         const cams = opts.cameras || [];
         setSystemCameras(cams);
         if (cams[0]) setSystemCameraId(cams[0].camera_id);
@@ -411,14 +411,13 @@ function SetupScreen({ onDone, onAuthError }) {
 
   const submit = () => {
     if (!facilityId) {
-      setError("Select a facility.");
+      setError("Facility configuration is unavailable.");
       return;
     }
     const common = {
       sourceType,
       facilityId: Number(facilityId),
-      facilityName:
-        facilities.find((f) => String(f.id) === String(facilityId))?.display_name || "",
+      facilityName: facility?.display_name || facility?.name || "",
       mode,
       serial: serial.trim(),
     };
@@ -514,12 +513,6 @@ function SetupScreen({ onDone, onAuthError }) {
           </>
         )}
 
-        <label className="text-xs font-bold text-text-muted -mb-2">Facility</label>
-        <select className={field} value={facilityId} onChange={(e) => setFacilityId(e.target.value)}>
-          {facilities.map((f) => (
-            <option key={f.id} value={f.id}>{f.display_name}</option>
-          ))}
-        </select>
         <label className="text-xs font-bold text-text-muted -mb-2">Mode</label>
         <div className="grid grid-cols-3 gap-2">
           {[
@@ -761,7 +754,6 @@ function KioskScreen({ config, onReconfigure, onAuthError }) {
           {phase === "prereg" && scanResult && (
             <PreRegForm
               user={scanResult.user}
-              facilityId={config.facilityId}
               onSubmit={submitPrereg}
               onCancel={() => goto("scanning")}
             />
@@ -897,7 +889,7 @@ const PREREG_FIELDS = [
   ["country", "Country"], ["pin_code", "PIN code"],
 ];
 
-function PreRegForm({ user, facilityId, onSubmit, onCancel }) {
+function PreRegForm({ user, onSubmit, onCancel }) {
   const [form, setForm] = useState(() => {
     const f = { token_type: "General", mrn: user.mrn || "" };
     for (const [k] of PREREG_FIELDS) f[k] = user[k] || "";
@@ -908,7 +900,7 @@ function PreRegForm({ user, facilityId, onSubmit, onCancel }) {
 
   const genMrn = async () => {
     try {
-      const res = await apiNewMrn(facilityId);
+      const res = await apiNewMrn();
       setForm((f) => ({ ...f, mrn: res.mrn }));
     } catch (err) {
       setError(err.message);

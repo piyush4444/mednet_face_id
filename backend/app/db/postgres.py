@@ -113,6 +113,54 @@ def init_db() -> None:
     # registered ORM doesn't try to recreate a table whose physical
     # name has just changed.
     inspector = inspect(engine)
+    legacy_identity_reset = False
+
+    # The pre-release RBAC schema used separate user_profile/user_auth rows
+    # and facility-scoped mappings. A reset database may still contain those
+    # empty table definitions because create_all never alters existing tables.
+    # Replace them only when every legacy identity table is empty; deployments
+    # with data require an explicit data migration and are left untouched.
+    legacy_tables = [
+        name
+        for name in (
+            "user_permission_mapping",
+            "user_role_mapping",
+            "user_auth",
+            "user_profile",
+            "staff_accounts",
+        )
+        if inspector.has_table(name)
+    ]
+    old_role_columns = (
+        {column["name"] for column in inspector.get_columns("user_role_mapping")}
+        if inspector.has_table("user_role_mapping")
+        else set()
+    )
+    if "user_auth_id" in old_role_columns and legacy_tables:
+        with engine.connect() as conn:
+            legacy_empty = all(
+                conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() == 0
+                for table in legacy_tables
+            )
+        if legacy_empty:
+            with engine.begin() as conn:
+                if inspector.has_table("kiosk_devices"):
+                    for foreign_key in inspector.get_foreign_keys("kiosk_devices"):
+                        if foreign_key.get("referred_table") == "staff_accounts":
+                            constraint = foreign_key["name"].replace('"', '""')
+                            conn.execute(text(
+                                f'ALTER TABLE kiosk_devices '
+                                f'DROP CONSTRAINT "{constraint}"'
+                            ))
+                for table in legacy_tables:
+                    conn.execute(text(f'DROP TABLE "{table}"'))
+            legacy_identity_reset = True
+            inspector = inspect(engine)
+        else:
+            raise RuntimeError(
+                "Legacy RBAC tables contain data. Migrate them before starting "
+                "the canonical-user RBAC schema."
+            )
 
     # User-model expansion, Phase 1: rename ``patients`` → ``users``.
     # PostgreSQL preserves all FK constraints that targeted the
@@ -126,17 +174,30 @@ def init_db() -> None:
     # Import models for their side effect: registering tables on Base.
     from backend.app.db import models  # noqa: F401
     from backend.app.db import frontdesk_models  # noqa: F401
-    from backend.app.db import auth_models  # noqa: F401  (staff_accounts)
+    from backend.app.db import auth_models  # noqa: F401  (credentials/service accounts)
     from backend.app.db import audit_models  # noqa: F401  (audit_log)
-    # B2B restructure r3.1 — identity/auth/RBAC tables (user_profile,
-    # user_auth, role_master, permission_master, *_mapping). Additive:
-    # created alongside the legacy tables until services migrate over.
+    # Global role/permission catalog and canonical-user mappings.
     from backend.app.db import identity_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 
     # ── Post-create_all column/index patches ─────────────────────
     inspector = inspect(engine)  # refresh after create_all
+
+    if legacy_identity_reset and inspector.has_table("kiosk_devices"):
+        account_foreign_key = any(
+            "account_id" in foreign_key.get("constrained_columns", [])
+            for foreign_key in inspector.get_foreign_keys("kiosk_devices")
+        )
+        if not account_foreign_key:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE kiosk_devices "
+                    "ADD CONSTRAINT kiosk_devices_account_id_fkey "
+                    "FOREIGN KEY (account_id) REFERENCES service_accounts(id) "
+                    "ON DELETE SET NULL"
+                ))
+            inspector = inspect(engine)
 
     # User-model expansion, Phase 1: patch columns on ``users``.
     # ``create_all`` does not alter existing tables, so every new
@@ -319,12 +380,10 @@ def init_db() -> None:
                 "ON patient_sessions (patient_id) WHERE status = 'INSIDE'"
             ))
 
-    # ── B2B restructure, Phase 1: registry columns + facility seed ──
-    # ``users`` becomes the PERSON_REGISTRY (identity is universal);
-    # role-per-facility moves to ``person_visit_mapping``. The new
-    # tables themselves are created by ``create_all`` above; this block
-    # patches ``users`` and backfills a seed facility + one mapping per
-    # existing user, so a restarted deployment is immediately coherent.
+    # ── Canonical person registry + singleton facility membership ──
+    # ``users`` is the one human identity table. The new tables are created
+    # by ``create_all`` above; this block patches registry columns and, after
+    # explicit bootstrap, creates one operational membership per user.
     if inspector.has_table("users"):
         columns = {col["name"] for col in inspector.get_columns("users")}
         _REGISTRY_COLUMNS = {
@@ -383,53 +442,37 @@ def init_db() -> None:
                 "WHERE first_name IS NULL AND name IS NOT NULL"
             ))
 
-    # Seed facility + one mapping per existing user. Every current row
-    # belongs to the single deployed site; multi-facility rows arrive
-    # later through the admin UI. ``visit_count`` / ``last_visit_at``
-    # are backfilled from the historical presence sessions.
+    # Backfill one mapping per existing user when the deployment has been
+    # bootstrapped. Facility creation belongs to ``scripts.seed_initial`` so
+    # startup never silently invents configuration or credentials.
     if inspector.has_table("facility_master"):
         with engine.begin() as conn:
             facility_id = conn.execute(text(
                 "SELECT id FROM facility_master ORDER BY id LIMIT 1"
             )).scalar()
-            if facility_id is None:
-                # NOT NULL client columns (facility_guid/regn_number/
-                # display_name/contact_number) get placeholders on the
-                # auto-seeded default facility; real values are set via the
-                # admin CRUD once the facility is linked to the client HIS.
-                facility_id = conn.execute(text(
-                    "INSERT INTO facility_master "
-                    "(facility_guid, regn_number, display_name, "
-                    " contact_number, code, is_active, created_at) "
-                    "VALUES (gen_random_uuid()::text, 0, 'Main Facility', "
-                    "        '0000000000', 'MAIN', TRUE, NOW()) "
-                    "RETURNING id"
-                )).scalar()
-
             # Legacy backfill: one person_facility row per existing user.
-            # No-op on a clean rebuild (no users yet); current_version
-            # defaults to 1 via server_default. Membership version rows are
-            # written by the service layer on create/change, not here.
-            conn.execute(
-                text(
-                    "INSERT INTO person_facility ("
-                    "person_id, facility_id, person_type, mrn, "
-                    "visit_count, last_visit_at, is_active, created_at"
-                    ") "
-                    "SELECT u.id, :fid, u.user_type, u.mrn, "
-                    "COALESCE((SELECT COUNT(*) FROM patient_sessions ps "
-                    "          WHERE ps.patient_id = u.id), 0), "
-                    "(SELECT MAX(ps.entry_time) FROM patient_sessions ps "
-                    " WHERE ps.patient_id = u.id), "
-                    "u.is_active, NOW() "
-                    "FROM users u "
-                    "WHERE NOT EXISTS ("
-                    "  SELECT 1 FROM person_facility m "
-                    "  WHERE m.person_id = u.id AND m.facility_id = :fid"
-                    ")"
-                ),
-                {"fid": facility_id},
-            )
+            # No-op until the initial seed has created the singleton facility.
+            if facility_id is not None:
+                conn.execute(
+                    text(
+                        "INSERT INTO person_facility ("
+                        "person_id, facility_id, person_type, mrn, "
+                        "visit_count, last_visit_at, is_active, created_at"
+                        ") "
+                        "SELECT u.id, :fid, u.user_type, u.mrn, "
+                        "COALESCE((SELECT COUNT(*) FROM patient_sessions ps "
+                        "          WHERE ps.patient_id = u.id), 0), "
+                        "(SELECT MAX(ps.entry_time) FROM patient_sessions ps "
+                        " WHERE ps.patient_id = u.id), "
+                        "u.is_active, NOW() "
+                        "FROM users u "
+                        "WHERE NOT EXISTS ("
+                        "  SELECT 1 FROM person_facility m "
+                        "  WHERE m.person_id = u.id AND m.facility_id = :fid"
+                        ")"
+                    ),
+                    {"fid": facility_id},
+                )
 
     # Camera roster DB cutover. Fresh databases receive these columns from
     # the ORM model; this additive patch keeps an earlier, unused

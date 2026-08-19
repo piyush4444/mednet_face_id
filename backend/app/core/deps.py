@@ -3,8 +3,8 @@ deps.py — FastAPI security dependencies.
 
 Two things live here:
 
-* :func:`get_current_account` — resolve the session cookie to a live
-  :class:`StaffAccount`, or 401. Loads fresh from the DB every request so
+* :func:`get_current_account` — resolve the session cookie to a live human
+  user or service principal, or 401. Loads fresh from the DB every request so
   grants/revokes/disables take effect immediately.
 * :func:`require_permission` — the guard factory used across ``router.py``
   in Phase 2. It is gated by ``settings.AUTH_ENABLED``: while that flag is
@@ -22,7 +22,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
-from backend.app.db.auth_models import Permission, StaffAccount
+from backend.app.db.auth_models import Permission
 from backend.app.db.postgres import get_db
 from backend.app.services import auth_service
 
@@ -30,13 +30,14 @@ CSRF_COOKIE_NAME = "iris_csrf"
 CSRF_HEADER_NAME = "x-csrf-token"
 
 
-def _account_from_request(request: Request, db: Session) -> StaffAccount | None:
+def _account_from_request(request: Request, db: Session) -> auth_service.AuthPrincipal | None:
     """Resolve the session cookie to an active account, or None."""
     token = request.cookies.get(settings.SESSION_COOKIE_NAME)
-    account_id = auth_service.read_session_token(token or "")
-    if account_id is None:
+    session = auth_service.read_session_token(token or "")
+    if session is None:
         return None
-    acct = auth_service.get_account(db, account_id)
+    kind, principal_id = session
+    acct = auth_service.get_account(db, principal_id, kind)
     if acct is None or not acct.is_active:
         return None
     return acct
@@ -44,14 +45,14 @@ def _account_from_request(request: Request, db: Session) -> StaffAccount | None:
 
 def get_optional_account(
     request: Request, db: Session = Depends(get_db)
-) -> StaffAccount | None:
+) -> auth_service.AuthPrincipal | None:
     """Account if a valid session is present, else None (never raises)."""
     return _account_from_request(request, db)
 
 
 def get_current_account(
     request: Request, db: Session = Depends(get_db)
-) -> StaffAccount:
+) -> auth_service.AuthPrincipal:
     """Require a valid session; 401 otherwise."""
     acct = _account_from_request(request, db)
     if acct is None:
@@ -71,7 +72,9 @@ def require_permission(perm: Permission):
     unauthenticated, 403 if the account lacks ``perm``.
     """
 
-    def _dep(request: Request, db: Session = Depends(get_db)) -> StaffAccount | None:
+    def _dep(
+        request: Request, db: Session = Depends(get_db)
+    ) -> auth_service.AuthPrincipal | None:
         if not settings.AUTH_ENABLED:
             return None
         acct = get_current_account(request, db)

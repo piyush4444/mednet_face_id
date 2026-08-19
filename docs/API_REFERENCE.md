@@ -35,7 +35,7 @@ Verified against codebase as of `2026-05-24`.
 18. [Metrics](#18-metrics)
 19. [Integration recipes](#19-integration-recipes)
 20. [Notes for production deployments](#20-notes-for-production-deployments)
-21. [Facilities admin](#21-facilities-admin)
+21. [Facility configuration](#21-facility-configuration)
 22. [Kiosk](#22-kiosk)
 23. [Integrations (outbound delivery)](#23-integrations)
 24. [Locations admin](#24-locations-admin)
@@ -66,11 +66,13 @@ Multipart uploads (`POST /register/multi`, `POST /recognize`, `POST /frontdesk/s
 
 ## 2. Authentication & CORS
 
-Authentication is being rolled out in phases (see the `auth-rbac` engineering plan). **Phase 1 (session foundation) is in place**; RBAC enforcement is gated behind the `AUTH_ENABLED` flag and switches on with the login UI.
+Authentication uses the canonical `users` identity. Employees and doctors may
+receive an optional credential, role, and permission overrides; kiosks use
+separate non-human service accounts.
 
 ### Session model
 
-* **Cookie sessions, not header tokens.** `POST /auth/login` sets an HttpOnly, signed session cookie (`iris_session`) carrying only the account id, plus a readable CSRF cookie (`iris_csrf`). Cookies are used (not `Authorization` headers) so MJPEG `<img>` tags and the WebSocket handshake authenticate the same way.
+* **Cookie sessions, not header tokens.** `POST /auth/login` sets an HttpOnly, signed session cookie carrying the principal kind and canonical user/service ID, plus a readable CSRF cookie (`iris_csrf`).
 * Send `credentials: 'include'` on fetches. On mutating requests (POST/PUT/PATCH/DELETE), echo the `iris_csrf` cookie value in an `X-CSRF-Token` header (double-submit CSRF; enforced only when `AUTH_ENABLED=true`).
 * Sessions expire after `SESSION_TTL_HOURS` (default 12h). Login is rate-limited: after `LOGIN_MAX_ATTEMPTS` failures per (username, IP), further attempts return `429` for `LOGIN_LOCKOUT_MINUTES`.
 
@@ -82,7 +84,8 @@ Authentication is being rolled out in phases (see the `auth-rbac` engineering pl
 | `POST` | `/api/v1/auth/logout` | — | `200`, clears cookies (idempotent) |
 | `GET`  | `/api/v1/auth/me` | requires session cookie | `200` → same shape as login; `401` if unauthenticated |
 
-`permissions[]` is the account's **effective** permission set (role defaults ∪ per-account grants − revocations). The SPA drives which UI it shows from this list. Bootstrap the first `super_admin` via the CLI (`python -m backend.scripts.create_account --role super_admin`); thereafter manage accounts through the API below.
+`permissions[]` is the principal's effective permission set. Bootstrap the
+facility and first superadmin with `python -m backend.scripts.seed_initial`.
 
 ### Account management (`/api/v1/auth/accounts`)
 
@@ -90,10 +93,11 @@ Guarded by `accounts.manage_staff` (which `super_admin` also holds). Mutating ca
 
 | Method | Path | Notes |
 | ------ | ---- | ----- |
-| `GET`  | `/auth/accounts` | List accounts. Admins see `staff` only; super_admins see all. |
-| `POST` | `/auth/accounts` | `{ username, password, role }`. Admins may create `staff` only; only super_admins may create `admin`/`super_admin`. |
-| `PATCH`| `/auth/accounts/{id}` | `{ role?, is_active? }` — change role / disable. Subject to the manage hierarchy. |
-| `PATCH`| `/auth/accounts/{id}/permissions` | `{ grant: [], revoke: [] }`. An admin may only grant staff-grantable permissions it itself holds; a super_admin may grant anything below super_admin. |
+| `GET`  | `/auth/accounts` | Users that currently have login access. |
+| `GET`  | `/auth/accounts/candidates` | Active employees/doctors eligible for access. |
+| `POST` | `/auth/accounts` | `{ user_id, username, password, role }`; grants access to an existing user. |
+| `PATCH`| `/auth/accounts/{user_id}` | Change role or enable/disable login. |
+| `PATCH`| `/auth/accounts/{user_id}/permissions` | Apply per-user grants/revocations. |
 
 ### Audit log (`/api/v1/audit`)
 
@@ -105,9 +109,9 @@ Guarded by `audit.read`. Append-only trail of security-relevant actions (logins 
 
 ### Enforcement map
 
-Every router carries a permission guard (`backend/app/api/router.py` is the single map): `register`→`faces.enroll`, `recognize`/`frontdesk`→`frontdesk.operate`, `users`/`patients`→`users.read` (mutations →`users.write`, face updates →`faces.enroll`), `tracking`→`tracking.read`, `history`→`history.read`, `stream`→`streams.view`, `metrics`→`metrics.read`, `cameras`→`cameras.manage`, `frontdesk/admin`→`frontdesk_admin.manage`, `audit`→`audit.read`, `facilities`/`locations`→`facilities.manage`, `kiosk`→`kiosk.operate`, `kiosk-admin`→`kiosk.manage`, `integrations`→`integrations.manage`. `health` and `/auth/login|logout|me|config` are unguarded. **All guards are inert until `AUTH_ENABLED=true`.**
+Every router carries a permission guard (`backend/app/api/router.py` is the single map). `facility`/`locations` use `locations.manage`; all guards are inert until `AUTH_ENABLED=true`.
 
-`facilities.manage` and `integrations.manage` are admin-tier defaults; `kiosk.operate` is a staff default. **Kiosk device principal**: the entry-gate kiosk runs unattended, so under `AUTH_ENABLED` it signs in once as a dedicated **kiosk device account** — a `staff` login stripped by revocation to exactly `{kiosk.operate, streams.view}` (no patient-PII reads, no front-desk operate). Provision it with `python -m backend.scripts.create_account --kiosk --username kiosk-gate-1`. Its session cookie rides all `/kiosk/*` + `/stream/*` calls; the kiosk reads its facility/camera pickers from `/kiosk/setup-options` (also `kiosk.operate`) so it never needs the admin-tier `/facilities` or `/cameras` APIs.
+`locations.manage` and `integrations.manage` are admin-tier defaults; `kiosk.operate` is a staff default. Kiosks authenticate with a dedicated non-human service account provisioned using `python -m backend.scripts.create_account --kiosk --username kiosk-gate-1`.
 
 ### Roles & permissions
 
@@ -1008,60 +1012,28 @@ For wider architecture context (multi-process layout, camera pipeline, FAISS lif
 
 ---
 
-## 21. Facilities admin
+## 21. Facility configuration
 
-CRUD for facilities (hospitals / sites) — the `facility_master` table of the
-multi-facility data model (see ARCHITECTURE.md §3.14). Each facility carries
-the client-HIS integration identifiers echoed into outbound payloads
-(`client_facility_guid`, `client_company_id`) plus a free-form
-`integration_config` JSON object for the remaining per-facility knobs
-(e.g. `queueSetupID`). Managed from Settings → Facilities in the SPA.
+The deployment contains exactly one facility, created by the initial seed.
+There is no facility CRUD or switcher in the application.
 
-Deletes are soft (`is_active=false`) — person mappings, tracking logs and
-pre-registration rows keep their FK.
-
-### `GET /api/v1/facilities`
-
-Query params: `include_inactive` (bool, default `false`).
+### `GET /api/v1/facility`
 
 ```json
 {
-  "facilities": [
-    {
-      "id": 1,
-      "name": "Main Facility",
-      "code": "MAIN",
-      "address": null,
-      "city": null,
-      "state": null,
-      "country": null,
-      "pin_code": null,
-      "client_facility_guid": "ce968cc1-9305-4933-a875-STAGE",
-      "client_company_id": 3,
-      "integration_config": {"queueSetupID": 36},
-      "is_active": true
-    }
-  ]
+  "id": 1,
+  "display_name": "Mednet",
+  "code": "MEDNET",
+  "address": null,
+  "city": null,
+  "state": null,
+  "pin_code": null,
+  "facility_guid": "ce968cc1-9305-4933-a875-STAGE",
+  "client_company_id": 3,
+  "integration_config": {"queueSetupID": 36},
+  "is_active": true
 }
 ```
-
-### `GET /api/v1/facilities/{facility_id}`
-
-Single facility object (shape above). `404` when missing.
-
-### `POST /api/v1/facilities`
-
-Body: `name` and `code` required; every other field above optional.
-`code` is upper-cased and unique — `409` on duplicates.
-
-### `PATCH /api/v1/facilities/{facility_id}`
-
-Partial update; any subset of the fields above plus `is_active`.
-`404` when missing, `409` on a `code` collision.
-
-### `DELETE /api/v1/facilities/{facility_id}`
-
-Soft-delete (`is_active=false`). Returns the updated object.
 
 ---
 
@@ -1116,7 +1088,7 @@ dedup key).
 
 JSON: `user_id`, `facility_id`, `token_type` (`General`|`Cash`), plus any
 of the demographic fields (`prefix`, `first_name`, …, `mrn`). Corrected
-demographics are written back to the registry row; the per-facility MRN
+demographics are written back to the registry row; the facility-issued MRN
 lands on the mapping. Stores a `pre_registration_log` row with the
 client-shaped payload, `status=PENDING` (the HIS push is the export
 phase). Response:
@@ -1134,20 +1106,20 @@ phase). Response:
 `token_no` / `pre_regn_id` populate once the push succeeds and the client
 HIS responds.
 
-### `GET /kiosk/mrn/new?facility_id=1`
+### `GET /kiosk/mrn/new`
 
 Random unique MRN (checked against `users.mrn` and the facility's
 mapping MRNs) — backs the form's "Generate" button. → `{"mrn": "X7K2…"}`
 
 ### `GET /kiosk/setup-options`
 
-Minimal facility + camera lists for the kiosk's one-time setup screen, so
+Singleton facility data plus the camera list for the kiosk setup screen, so
 the kiosk device account needs no admin-tier reads. Only the picker fields
 (no client GUIDs, no camera source URLs).
 
 ```json
 {
-  "facilities": [{ "id": 1, "name": "Main Facility" }],
+  "facility": { "id": 1, "name": "Mednet" },
   "cameras": [{ "camera_id": "cam_ce2cc3ad", "name": "test_cam3", "role": "entry", "active": true }]
 }
 ```
@@ -1210,7 +1182,7 @@ Invariants (enforced server-side): a location's parent must be in the
 **same facility**, the parent chain must stay acyclic, and
 `location_type` is one of `FLOOR|CORRIDOR|ROOM|GATE|WARD|OTHER`.
 
-### `GET /api/v1/locations?facility_id=1&include_inactive=false`
+### `GET /api/v1/locations?include_inactive=false`
 
 ```json
 {
@@ -1226,7 +1198,7 @@ Invariants (enforced server-side): a location's parent must be in the
 
 ### `POST /api/v1/locations`
 
-Body: `facility_id` + `name` required; optional `location_type`
+Body: `name` required; optional `location_type`
 (default `OTHER`), `parent_location_id`, `description`. `404` for a
 missing facility/parent, `400` for an invalid type or a cycle.
 

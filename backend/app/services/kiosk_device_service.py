@@ -85,7 +85,6 @@ def create_device(
     *,
     serial: str,
     name: str,
-    facility_id: Optional[int] = None,
     mode: str = "AUTO",
     source_type: str = "webcam",
     camera_id: Optional[str] = None,
@@ -99,10 +98,13 @@ def create_device(
     _validate(mode, source_type)
     if get_device_by_serial(db, serial) is not None:
         raise ConflictError(f"kiosk serial {serial!r} already registered")
+    from backend.app.services.facility_service import get_single_facility
+
+    facility = get_single_facility(db)
     dev = KioskDevice(
         serial=serial,
         name=name.strip(),
-        facility_id=facility_id,
+        facility_id=facility.id,
         mode=mode.upper(),
         source_type=source_type,
         camera_id=(camera_id or None),
@@ -125,7 +127,7 @@ def update_device(db: Session, device_id: int, updates: Dict[str, Any]) -> Kiosk
         if updates["source_type"] not in _VALID_SOURCES:
             raise ValidationError("invalid source_type")
     EDITABLE = {
-        "name", "facility_id", "mode", "source_type", "camera_id",
+        "name", "mode", "source_type", "camera_id",
         "dup_window", "is_active",
     }
     for k, v in updates.items():

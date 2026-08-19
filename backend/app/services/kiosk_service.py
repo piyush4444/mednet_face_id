@@ -23,8 +23,8 @@ Design notes
   unique transaction id). The duplicate-punch window makes same-second
   collisions unreachable in practice; a unique-constraint race is still
   caught and treated as a duplicate.
-- The client HIS credentials are env vars; per-facility identifiers come
-  from the facility row. Nothing secret is ever written into payloads
+- The client HIS credentials are env vars; deployment identifiers come from
+  the singleton facility row. Nothing secret is ever written into payloads
   stored in the DB.
 """
 
@@ -79,7 +79,7 @@ def get_or_create_mapping(
     """One row per (person, facility); created lazily on first sighting.
 
     A new mapping inherits the user's global ``user_type`` and MRN as its
-    starting per-facility values — the admin UI can re-purpose it later.
+    starting operational values for the singleton facility.
     """
     mapping = (
         db.query(PersonVisitMapping)
@@ -287,7 +287,7 @@ def record_punch(
 # ── MRN ──────────────────────────────────────────────────────────────────
 def generate_unique_mrn(db: Session, facility_id: Optional[int] = None) -> str:
     """Random MRN, unique against both the legacy global ``users.mrn``
-    and the per-facility mapping MRNs. Backs the form's generate button."""
+    and facility-membership MRNs. Backs the form's generate button."""
     for _ in range(8):
         mrn = generate_mrn()
         clash = db.query(User).filter(User.mrn == mrn).first()
@@ -322,7 +322,7 @@ def submit_pre_registration(
     """Persist a pre-registration as PENDING in the client's payload shape.
 
     Also writes any corrected demographics back onto the registry row and
-    the per-facility MRN onto the mapping. The HTTP push to the client
+    the facility-issued MRN onto the membership. The HTTP push to the client
     HIS happens in the export phase (no-op until CLIENT_PREREG_API_URL is
     configured).
     """

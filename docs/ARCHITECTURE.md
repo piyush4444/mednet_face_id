@@ -328,17 +328,17 @@ the `FrontDeskConfig` component embedded by [Settings.jsx](../frontend/src/pages
 Deletes are soft; the snapshot columns on `OPDVisit` mean deactivating a
 doctor or renaming a department does not corrupt historical slips.
 
-### 3.14 Multi-facility data model (B2B restructure, Phase 1)
+### 3.14 Single-facility identity and operations model
 
-Iris is becoming a centralized, multi-facility identity system for the
-client-HIS integration (punch IN/OUT attendance + patient pre-registration).
-Phase 1 lands the data model in [facility_models.py](../backend/app/db/facility_models.py):
+Iris serves exactly one facility. `facility_master` remains as a singleton
+configuration row because cameras, locations, punches, and client-HIS payloads
+need a stable relational/configuration anchor; it is not a tenant selector.
 
 | Table | Purpose |
 | --- | --- |
-| `facility_master` | Hospitals / sites. Carries the client-HIS identifiers (`client_facility_guid`, `client_company_id`, `integration_config` JSONB e.g. `queueSetupID`) echoed into outbound payloads. Admin CRUD at `/api/v1/facilities` (Settings → Facilities). |
+| `facility_master` | Singleton Mednet deployment record and client-HIS identifiers. Created only by `backend.scripts.seed_initial`; read-only at `/api/v1/facility`. |
 | `location_master` | Named places inside a facility (floor / corridor / room / gate), hierarchical via `parent_location_id` (FHIR-Location style). CRUD at `/api/v1/locations`; cameras reference facilities and optional locations through `camera_master`. |
-| `person_visit_mapping` | person × facility: `person_type` (what a person *is* — PATIENT/EMPLOYEE/… — is **per facility**, not global), per-facility `mrn` (unique per facility, partial index), `visit_count` (running counter, the client's COUNT), `last_visit_at`. One row per (person, facility). |
+| `person_facility` | Operational membership in the singleton facility: client-facing `person_type`, MRN, visit counter, and last-visit time. There is one effective membership per user in this deployment. |
 | `person_tracking_logs` | Append-only punch / sighting events: `visit_type` IN/OUT (official punches from gate/kiosk cameras) or TRACKER_IN/TRACKER_OUT (internal zone sightings, never exported), `visit_number` snapshot, `source` KIOSK/CAMERA/MANUAL. Presence state stays derived. |
 | `punch_export_queue` | Outbound punch deliveries to the client attendance API (EMPLOYEE/DOCTOR mappings only, one punch per request). `biometric_idx` mirrors the client's unique transaction id so retries are idempotent. Pusher lands in a later phase. |
 | `pre_registration_log` | One row per pre-registration pushed to the client HIS; stores their `preRegnId` / `tokenNo` (shown on the kiosk) plus raw request/response JSONB for audit. Forwarder lands in a later phase. |
@@ -350,16 +350,14 @@ Phase 1 adds the registry columns (`prefix`, `first/middle/last_name`,
 `whatsapp_number`, `email`, `city/state/country/pin_code`,
 `national_id_type`+`national_id`, next-of-kin trio, `photo_url`).
 
-Boot migration (in [postgres.py](../backend/app/db/postgres.py) `init_db()`,
-same idempotent pattern as the user-model expansion): adds the columns,
-backfills `person_guid` and a best-effort first/middle/last split of `name`,
-seeds one `Main Facility` (`MAIN`) when the table is empty, and creates one
-mapping per existing user against it (`visit_count` / `last_visit_at`
-backfilled from `patient_sessions`).
+`python -m backend.scripts.seed_initial` idempotently creates the Mednet row
+and the first superadmin. Startup never invents a facility or credentials.
+The internal `facility_id` columns remain for referential integrity and
+integration payload compatibility, but all service resolution is automatic.
 
 Client-HIS endpoint URLs + credentials are env vars
 (`CLIENT_PUNCH_API_URL`, `CLIENT_PREREG_API_URL`, … — see CONFIGURATION.md §2);
-per-facility non-secret values live on the facility row.
+facility integration identifiers live on the singleton facility row.
 
 **Kiosk** (Phase 2): a second Vite entry point ([kiosk.html](../frontend/kiosk.html)
 → [src/kiosk/](../frontend/src/kiosk/)) gives the entry-gate screen its own

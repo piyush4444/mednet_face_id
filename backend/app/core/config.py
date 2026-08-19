@@ -77,9 +77,17 @@ class Settings(BaseSettings):
     # the environment or a .env file (which is .gitignored).
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/facedb"
 
+    # ── First-run bootstrap ──────────────────────────────────────────────
+    # Used only by ``python -m backend.scripts.seed_initial``. Keep the
+    # password blank in source and provide it through the environment.
+    BOOTSTRAP_FACILITY_NAME: str = "Mednet"
+    BOOTSTRAP_SUPERADMIN_NAME: str = "Mednet Superadmin"
+    BOOTSTRAP_SUPERADMIN_USERNAME: str = "superadmin"
+    BOOTSTRAP_SUPERADMIN_PASSWORD: str = ""
+
     # ── Client HIS integration (B2B partner) ─────────────────────────────
-    # Secrets live here (.env, gitignored); per-facility non-secret values
-    # (facilityGuid, companyID, queueSetupID) live on ``facility_master``.
+    # Secrets live here (.env, gitignored); singleton-facility integration
+    # values (facilityGuid, companyID, queueSetupID) live on ``facility_master``.
     # Empty URL = integration disabled; the punch pusher and pre-reg
     # forwarder no-op until the values are supplied.
     CLIENT_PUNCH_API_URL: str = ""

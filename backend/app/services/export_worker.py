@@ -228,7 +228,7 @@ def _apply_prereg_success(db, row: PreRegistrationLog, result) -> None:
     if result.queue_setup_id is not None:
         row.queue_setup_id = result.queue_setup_id
 
-    # If the HIS assigned an MRN, copy it onto the per-facility mapping.
+    # If the HIS assigned an MRN, copy it onto the facility membership.
     data = (result.data or {}).get("data") if isinstance(result.data, dict) else None
     hin_mrn = (data or {}).get("mrn") if isinstance(data, dict) else None
     if hin_mrn and row.person_facility_id:

@@ -1,9 +1,10 @@
 """
-facility_models.py — ORM models for the multi-facility restructure.
+facility_models.py — singleton-facility operations and integration models.
 
 Phase 1 of the B2B-partner restructure (see ``docs/CHANGELOG.md``):
-the client-mandated table set that turns Iris into a centralized,
-multi-facility identity system.
+The facility foreign keys remain internal relational anchors for locations,
+cameras, visits, kiosks, and client-HIS payloads. The application supports
+exactly one active facility and never exposes tenant switching.
 
 Tables
 ------
@@ -14,12 +15,9 @@ Tables
 - location_master       : named places inside a facility (floor, corridor,
                           room, gate). Hierarchical via ``parent_location_id``
                           (FHIR-Location style: floor ⊃ corridor ⊃ room).
-- person_visit_mapping  : person × facility. What a person *is* (patient /
-                          employee / visitor …) is per-facility, not global —
-                          the same person can be EMPLOYEE at facility A and
-                          VISITOR at facility B. Also carries the per-facility
-                          MRN and the running ``visit_count`` (the client
-                          sheet's COUNT).
+- person_facility       : one operational membership per person in the
+                          singleton facility. Carries the client-facing person
+                          type, MRN, and running ``visit_count``.
 - person_tracking_logs  : append-only event log — every punch (IN/OUT from
                           gate/kiosk cameras) and every zone sighting
                           (TRACKER_IN/TRACKER_OUT from internal cameras).
@@ -278,9 +276,11 @@ class DataMigration(Base):
 
 
 class PersonFacility(Base):
-    """person × facility — role, per-facility MRN, and visit counter.
+    """A person's operational record in the singleton facility.
 
-    One row per (person, facility). The *current* value of the versioned
+    One row per person for this deployment. The database retains the
+    ``facility_id`` relation as an integration and referential-integrity
+    anchor. The *current* value of the versioned
     attributes (``person_type`` / ``visitor_subtype`` / ``mrn`` /
     ``is_active``) lives here for fast reads; their history is in
     :class:`PersonFacilityVersion`. ``current_version`` points at the
@@ -308,8 +308,7 @@ class PersonFacility(Base):
         index=True,
     )
 
-    # Current values (history in person_facility_version). Same closed set
-    # as ``users.user_type`` (see models.UserType) but scoped to this facility.
+    # Current client-facing values (history in person_facility_version).
     person_type = Column(String(20), nullable=False, index=True)
     visitor_subtype = Column(String(20), nullable=True)  # VisitorSubtype
 
@@ -391,7 +390,7 @@ class PersonFacilityVersion(Base):
     is_current = Column(Boolean, default=True, nullable=False)
 
     change_reason = Column(String(255), nullable=True)
-    # Snapshot of the acting user_auth.id — NOT a hard FK (mirrors
+    # Snapshot of the acting principal id — NOT a hard FK (mirrors
     # audit_log.account_id), so a deleted login never blocks history.
     changed_by = Column(Integer, nullable=True)
 
@@ -490,7 +489,7 @@ class PunchExportSync(Base):
         nullable=False,
         unique=True,
     )
-    # Denormalised for per-facility filtering of the outbound queue.
+    # Denormalised to preserve the facility identifier in outbound records.
     # Nullable while writers backfill it; tighten to NOT NULL in Phase 7.
     facility_id = Column(
         Integer,
@@ -549,7 +548,7 @@ class KioskDevice(Base):
 
     # The kiosk device login this kiosk authenticates as (kiosk.operate).
     account_id = Column(
-        Integer, ForeignKey("staff_accounts.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey("service_accounts.id", ondelete="SET NULL"), nullable=True
     )
 
     is_active = Column(Boolean, default=True, nullable=False)

@@ -1,21 +1,20 @@
 /**
  * Locations — embeddable panel for managing LOCATION_MASTER: the named,
- * hierarchical places inside a facility (floor / corridor / room / gate /
+ * hierarchical places inside the facility (floor / corridor / room / gate /
  * ward). Hosted inside the Settings page (/settings?section=locations).
  *
- * Pick a facility, then add locations and optionally nest them under a
- * parent. The list is rendered as an indented tree by parent chain.
+ * Add locations and optionally nest them under a parent. The list is
+ * rendered as an indented tree by parent chain.
  * Deletes are soft (is_active=false) so tracking logs keep their FK.
  */
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "react-toastify";
 import {
-  listFacilities,
   listLocations,
   createLocation,
   patchLocation,
   deleteLocation,
-} from "../api/facilities";
+} from "../api/facility";
 import CustomSelect from "../components/CustomSelect";
 
 const LOCATION_TYPES = ["FLOOR", "CORRIDOR", "ROOM", "GATE", "WARD", "OTHER"];
@@ -50,31 +49,15 @@ function toTree(locations) {
 }
 
 export default function Locations() {
-  const [facilities, setFacilities] = useState([]);
-  const [facilityId, setFacilityId] = useState("");
   const [locations, setLocations] = useState([]);
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({
     name: "", location_type: "ROOM", parent_location_id: "", description: "",
   });
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await listFacilities();
-        const rows = res.facilities || [];
-        setFacilities(rows);
-        if (rows[0]) setFacilityId(String(rows[0].id));
-      } catch (err) {
-        toast.error(err.message);
-      }
-    })();
-  }, []);
-
   const reload = async () => {
-    if (!facilityId) return;
     try {
-      const res = await listLocations({ facilityId, includeInactive: showInactive });
+      const res = await listLocations({ includeInactive: showInactive });
       setLocations(res.locations || []);
     } catch (err) {
       toast.error(err.message);
@@ -84,7 +67,7 @@ export default function Locations() {
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [facilityId, showInactive]);
+  }, [showInactive]);
 
   const tree = useMemo(() => toTree(locations), [locations]);
   const parentOptions = useMemo(
@@ -96,17 +79,12 @@ export default function Locations() {
   );
 
   const submit = async () => {
-    if (!facilityId) {
-      toast.error("Select a facility first");
-      return;
-    }
     if (!form.name.trim()) {
       toast.error("Name is required");
       return;
     }
     try {
       await createLocation({
-        facility_id: Number(facilityId),
         name: form.name.trim(),
         location_type: form.location_type,
         parent_location_id: form.parent_location_id
@@ -148,17 +126,11 @@ export default function Locations() {
         <div>
           <h2 className="text-lg font-bold text-text-main">Locations</h2>
           <p className="text-xs text-text-muted mt-0.5">
-            Floors, corridors, rooms and gates inside a facility. Cameras and
+            Floors, corridors, rooms and gates inside this facility. Cameras and
             tracking logs reference these.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <CustomSelect
-            value={facilityId}
-            onChange={(e) => setFacilityId(e.target.value)}
-            placeholder="Facility…"
-            options={facilities.map((f) => ({ value: String(f.id), label: f.display_name }))}
-          />
           <label className="inline-flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -248,9 +220,7 @@ export default function Locations() {
               {tree.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-8 text-center text-sm text-text-muted">
-                    {facilityId
-                      ? "No locations yet — add the first one above."
-                      : "Select a facility to manage its locations."}
+                    No locations yet — add the first one above.
                   </td>
                 </tr>
               )}

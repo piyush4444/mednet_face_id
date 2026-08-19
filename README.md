@@ -18,6 +18,9 @@ patients across multiple cameras and runs an OPD front-desk workflow
   live "today's queue", manual MRN/phone/name search fallback.
 - **Visit history** — every token is logged with status timeline; the
   History page surfaces both face-tracking sessions and OPD visits.
+- **Unified identity and RBAC** — employees/doctors may receive login access
+  on their existing recognized user record; kiosks remain separate service
+  principals. Roles and permission overrides are database-backed.
 - **Settings hub** — manage rooms, departments, doctors, cameras and
   registered patients from a single `/settings` page.
 

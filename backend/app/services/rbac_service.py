@@ -18,11 +18,9 @@ Seeding is idempotent and non-destructive:
   no mappings yet**, so operator edits made through the admin UI are never
   overwritten on the next boot.
 
-Note (round 3.1): the *per-facility* principal side —
-``user_role_mapping`` keyed to ``user_auth`` — is wired in the later auth
-migration phase. Today the login principal is still ``StaffAccount`` and its
-single ``role`` string selects the bundle; this service only moves the
-role→permission bundle into the DB.
+Human role and permission assignments point directly to the canonical
+``users`` row. Credentials are an optional one-to-one extension and service
+accounts remain separate non-human principals.
 """
 
 from __future__ import annotations
@@ -66,6 +64,29 @@ def sync_catalog(db: Session) -> None:
             role_by_code[role.value] = row
 
     db.flush()  # assign ids to freshly added rows before mapping
+
+    # One-time vocabulary rename for the single-facility product. Preserve
+    # whichever roles previously held facilities.manage, then retire it.
+    legacy = db.query(PermissionMaster).filter(
+        PermissionMaster.code == "facilities.manage"
+    ).first()
+    replacement = perm_by_code.get(Permission.LOCATIONS_MANAGE.value)
+    if legacy is not None and replacement is not None:
+        legacy_links = db.query(RolePermissionMapping).filter(
+            RolePermissionMapping.permission_id == legacy.id
+        ).all()
+        for link in legacy_links:
+            exists = db.query(RolePermissionMapping).filter(
+                RolePermissionMapping.role_id == link.role_id,
+                RolePermissionMapping.permission_id == replacement.id,
+            ).first()
+            if exists is None:
+                db.add(RolePermissionMapping(
+                    role_id=link.role_id,
+                    permission_id=replacement.id,
+                ))
+            db.delete(link)
+        legacy.is_active = False
 
     # ── Role → permission bundles (first-time seed per role only) ──
     for role in Role:

@@ -16,13 +16,17 @@ from sqlalchemy.orm import Session
 
 from backend.app.db.postgres import get_db
 from backend.app.services import location_service as svc
+from backend.app.services.facility_service import (
+    ConflictError as FacilityConflict,
+    NotFoundError as FacilityNotFound,
+    get_single_facility,
+)
 from backend.app.services.location_service import NotFoundError, ValidationError
 
 router = APIRouter(prefix="/locations", tags=["locations"])
 
 
 class LocationIn(BaseModel):
-    facility_id: int
     name: str
     location_type: str = "OTHER"
     parent_location_id: Optional[int] = None
@@ -39,20 +43,28 @@ class LocationPatch(BaseModel):
 
 @router.get("")
 def list_locations(
-    facility_id: Optional[int] = None,
     include_inactive: bool = False,
     db: Session = Depends(get_db),
 ):
-    rows = svc.list_locations(
-        db, facility_id=facility_id, include_inactive=include_inactive
-    )
+    try:
+        facility = get_single_facility(db)
+    except FacilityNotFound as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except FacilityConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    rows = svc.list_locations(db, facility_id=facility.id, include_inactive=include_inactive)
     return {"locations": [svc.location_to_dict(r) for r in rows]}
 
 
 @router.post("")
 def create_location(payload: LocationIn, db: Session = Depends(get_db)):
     try:
-        loc = svc.create_location(db, **payload.model_dump())
+        facility = get_single_facility(db)
+        loc = svc.create_location(db, facility_id=facility.id, **payload.model_dump())
+    except FacilityNotFound as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except FacilityConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValidationError as exc:

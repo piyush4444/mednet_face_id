@@ -74,24 +74,15 @@ def _serialize(row: Camera) -> dict:
 
 
 def _default_facility_id(db) -> int:
-    facility = (
-        db.query(Facility).filter(Facility.code == "MAIN").first()
-        or db.query(Facility).order_by(Facility.id).first()
-    )
-    if facility is None:
-        raise RuntimeError("No facility exists; initialize the database first")
-    return facility.id
+    from backend.app.services.facility_service import get_single_facility
+
+    return get_single_facility(db).id
 
 
 def _resolve_placement(
     db, spec: dict, *, current: Camera | None = None
 ) -> tuple[int, int | None]:
-    facility_id = spec.get("facility_id")
-    if facility_id is None:
-        facility_id = current.facility_id if current is not None else _default_facility_id(db)
-
-    if db.get(Facility, facility_id) is None:
-        raise ValueError(f"facility_id {facility_id} does not exist")
+    facility_id = _default_facility_id(db)
 
     location_id = spec.get("location_id")
     if location_id is None and current is not None:
@@ -166,7 +157,7 @@ def update(camera_id: str, patch: dict) -> dict:
             if duplicate is not None:
                 raise ValueError(f"Camera with name '{name}' already exists")
 
-        placement_requested = "facility_id" in patch or "location_id" in patch
+        placement_requested = "location_id" in patch
         placement_changed = False
         if placement_requested:
             facility_id, location_id = _resolve_placement(db, patch, current=row)

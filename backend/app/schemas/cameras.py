@@ -42,9 +42,7 @@ class CameraCreate(BaseModel):
     floor: str = Field(min_length=1, max_length=40)
     role: CameraRole
     active: bool = True
-    # Optional placement in the facility/location model. Metadata only —
-    # the AI pipeline doesn't read these; the dashboard + tracking logs do.
-    facility_id: Optional[int] = None
+    # Optional location inside the deployment's singleton facility.
     location_id: Optional[int] = None
 
     @field_validator("source")
@@ -72,7 +70,6 @@ class CameraUpdate(BaseModel):
     floor: Optional[str] = Field(default=None, min_length=1, max_length=40)
     role: Optional[CameraRole] = None
     active: Optional[bool] = None
-    facility_id: Optional[int] = None
     location_id: Optional[int] = None
 
     @field_validator("source")

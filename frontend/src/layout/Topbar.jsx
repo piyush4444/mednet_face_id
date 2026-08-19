@@ -1,15 +1,13 @@
 /**
  * Topbar — context bar above the content area.
  *
- * Left: page breadcrumb (derived from the route). Right: facility switcher
- * (the "Cost Center" analog — hidden when the account can't list facilities),
- * refresh, fullscreen, live-connection dot, theme toggle, and the user menu
+ * Left: page breadcrumb (derived from the route). Right: refresh, fullscreen,
+ * live-connection dot, theme toggle, and the user menu
  * (username, role, logout).
  */
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
-import { useFacility } from "../hooks/useFacility";
 import { useConnected } from "../store/connectionStore";
 import { useThemeMode, toggleThemeMode } from "../store/themeStore";
 import { NAV_BY_PATH } from "./navConfig";
@@ -27,7 +25,6 @@ export default function Topbar() {
   const connected = useConnected();
   const themeMode = useThemeMode();
   const { account, role, logout, authEnabled } = useAuth();
-  const { facilities, facilityId, setFacilityId } = useFacility();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -54,22 +51,6 @@ export default function Topbar() {
       </div>
 
       <div className="ml-auto flex items-center gap-2 sm:gap-3">
-        {/* Facility switcher (Cost Center analog) */}
-        {facilities.length > 0 && (
-          <div className="hidden sm:flex items-center gap-2">
-            <span className="text-xs font-semibold text-text-muted">Facility</span>
-            <select
-              value={facilityId ?? ""}
-              onChange={(e) => setFacilityId(e.target.value)}
-              className="bg-background border border-primary/15 focus:border-primary rounded-lg px-3 py-1.5 text-sm font-bold outline-none max-w-[180px]"
-            >
-              {facilities.map((f) => (
-                <option key={f.id} value={f.id}>{f.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
         <button onClick={() => window.location.reload()} title="Refresh"
           className="p-2 rounded-xl text-text-muted hover:text-primary hover:bg-primary/10">
           <svg xmlns="http://www.w3.org/2000/svg" className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

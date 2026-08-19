@@ -32,8 +32,9 @@ from backend.app.db.postgres import get_db
 from backend.app.services import kiosk_service
 from backend.app.services.face_service import recognize_faces
 from backend.app.services.facility_service import (
+    ConflictError as FacilityConflict,
     NotFoundError as FacilityNotFound,
-    get_facility,
+    get_single_facility,
 )
 from backend.app.services.kiosk_service import KioskError
 from backend.app.services.media_service import resolve_media_url
@@ -52,6 +53,15 @@ _IMAGE_SIGNATURES: tuple[bytes, ...] = (
 
 _VALID_MODES = {"IN", "OUT", "AUTO"}
 _VALID_TOKEN_TYPES = {"General", "Cash"}
+
+
+def _facility_or_http(db: Session):
+    try:
+        return get_single_facility(db)
+    except FacilityNotFound as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except FacilityConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 def _decode_frame(data: bytes) -> np.ndarray:
@@ -133,10 +143,9 @@ async def kiosk_scan(
     mode = (mode or "AUTO").strip().upper()
     if mode not in _VALID_MODES:
         raise HTTPException(status_code=400, detail="mode must be IN, OUT or AUTO")
-    try:
-        facility = get_facility(db, facility_id)
-    except FacilityNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    facility = _facility_or_http(db)
+    if facility_id != facility.id:
+        raise HTTPException(status_code=409, detail="kiosk facility configuration is stale")
 
     img = _decode_frame(await image.read())
 
@@ -232,10 +241,9 @@ def kiosk_prereg(payload: PreRegIn, db: Session = Depends(get_db)):
             status_code=400,
             detail=f"token_type must be one of {sorted(_VALID_TOKEN_TYPES)}",
         )
-    try:
-        facility = get_facility(db, payload.facility_id)
-    except FacilityNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    facility = _facility_or_http(db)
+    if payload.facility_id != facility.id:
+        raise HTTPException(status_code=409, detail="kiosk facility configuration is stale")
     user = db.query(User).filter(User.id == payload.user_id).first()
     if user is None or not user.is_active:
         raise HTTPException(status_code=404, detail="user not found")
@@ -262,10 +270,11 @@ def kiosk_prereg(payload: PreRegIn, db: Session = Depends(get_db)):
 
 # ── /mrn/new ─────────────────────────────────────────────────────────────
 @router.get("/mrn/new")
-def new_mrn(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
+def new_mrn(db: Session = Depends(get_db)):
     """Random unique MRN for the form's generate button."""
     try:
-        return {"mrn": kiosk_service.generate_unique_mrn(db, facility_id)}
+        facility = _facility_or_http(db)
+        return {"mrn": kiosk_service.generate_unique_mrn(db, facility.id)}
     except KioskError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -289,19 +298,14 @@ def kiosk_config(serial: str, db: Session = Depends(get_db)):
 # ── /setup-options ───────────────────────────────────────────────────────
 @router.get("/setup-options")
 def setup_options(db: Session = Depends(get_db)):
-    """Minimal facility + camera lists for the kiosk's one-time setup screen.
+    """Singleton facility and camera list for the kiosk setup screen.
 
     Exists so the kiosk device account needs only ``kiosk.operate`` — it
-    never touches the admin-tier `/facilities` or `/cameras` read APIs.
+    never touches admin-tier facility or camera read APIs.
     Returns only the few fields the picker needs (no client GUIDs, no
     camera source URLs).
     """
-    from backend.app.services import facility_service
-
-    facilities = [
-        {"id": f.id, "name": f.name}
-        for f in facility_service.list_facilities(db)
-    ]
+    facility = _facility_or_http(db)
     cameras = []
     try:
         from backend.camera.registry import get_registry
@@ -318,4 +322,7 @@ def setup_options(db: Session = Depends(get_db)):
     except Exception:
         # Camera system not running (e.g. cloud box) — webcam still works.
         cameras = []
-    return {"facilities": facilities, "cameras": cameras}
+    return {
+        "facility": {"id": facility.id, "name": facility.display_name},
+        "cameras": cameras,
+    }

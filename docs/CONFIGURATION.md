@@ -40,6 +40,10 @@ your shell or a `.env` file at the project root.
 | `CAMERA_TEST_MODE`        | unset                                         | `1` → use the synthetic test simulator instead of real camera workers.                                  |
 | `SYNORA_DEBUG_LOG`        | `false`                                       | `true` → root logger at DEBUG, gated `print()` blocks emit. `false` → WARN+ only.                       |
 | `DATABASE_URL`            | `postgresql://postgres:postgres@localhost:5432/facedb` | SQLAlchemy connection string. Sync engine — point at your Postgres.                            |
+| `BOOTSTRAP_FACILITY_NAME` | `Mednet`                                        | Facility name used by the idempotent initial seed. |
+| `BOOTSTRAP_SUPERADMIN_NAME` | `Mednet Superadmin`                           | Canonical employee name for the first superadmin user. |
+| `BOOTSTRAP_SUPERADMIN_USERNAME` | `superadmin`                                | Initial login username. |
+| `BOOTSTRAP_SUPERADMIN_PASSWORD` | `""`                                      | Required only for `python -m backend.scripts.seed_initial`; minimum 8 characters. |
 | `APP_NAME`                | `Face Recognition API`                        | Shown in `/` and OpenAPI metadata.                                                                      |
 | `VERSION`                 | `1.0.0`                                       | Same.                                                                                                   |
 | `DEBUG`                   | `false`                                       | When `true`, raises root log level to DEBUG (cooperates with `SYNORA_DEBUG_LOG`).                        |
@@ -63,7 +67,7 @@ your shell or a `.env` file at the project root.
 | `MEDIA_DIR`               | `database/media`                              | Local root for profile photos (gitignored — biometric PII). Served at `/media/*` by the API. |
 | `MEDIA_BASE_URL`          | `""`                                          | When a dedicated media server exists, its public base URL. Empty → photo URLs resolve to the API's own `/media/*` mount. DB stores relative paths, so flipping this needs no data migration. |
 | `KIOSK_DUPLICATE_WINDOW`  | `120`                                         | Seconds within which a repeat punch of the same person + direction at the kiosk is ignored (person lingering in front of the camera punches once). |
-| `CLIENT_API_TIMEOUT`      | `10.0`                                        | Outbound HTTP timeout (seconds) for both client-HIS calls. Per-facility non-secret values (facilityGuid, companyID, queueSetupID) are **not** env vars — they live on the facility row (Settings → Facilities, `facility_master`). |
+| `CLIENT_API_TIMEOUT`      | `10.0`                                        | Outbound HTTP timeout. Non-secret integration identifiers live on the singleton facility row. |
 | `CLIENT_API_AUTH_HEADER`  | `Authorization`                               | Header the API key is attached to. |
 | `CLIENT_API_AUTH_SCHEME`  | `Bearer`                                      | Scheme prefix before the key (`Authorization: Bearer <key>`). Set empty for an `X-API-Key: <key>` style (with `AUTH_HEADER=X-API-Key`). Empty key → no auth header sent. |
 | `EXPORT_POLL_INTERVAL`    | `15`                                          | Seconds between export-worker sweeps of the punch + pre-reg queues. Worker only runs when a `CLIENT_*_API_URL` is set. |

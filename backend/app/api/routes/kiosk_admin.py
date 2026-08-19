@@ -30,7 +30,6 @@ router = APIRouter(prefix="/kiosk-admin", tags=["kiosk-admin"])
 class DeviceIn(BaseModel):
     serial: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=120)
-    facility_id: Optional[int] = None
     mode: str = "AUTO"
     source_type: str = "webcam"
     camera_id: Optional[str] = None
@@ -39,7 +38,6 @@ class DeviceIn(BaseModel):
 
 class DevicePatch(BaseModel):
     name: Optional[str] = None
-    facility_id: Optional[int] = None
     mode: Optional[str] = None
     source_type: Optional[str] = None
     camera_id: Optional[str] = None
@@ -106,24 +104,22 @@ def provision_account(device_id: int, payload: AccountIn, db: Session = Depends(
 # ── Logs ─────────────────────────────────────────────────────────────────
 @router.get("/activity")
 def activity(
-    facility_id: Optional[int] = None,
     visit_type: Optional[str] = None,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
     return {"activity": svc.list_activity(
-        db, facility_id=facility_id, visit_type=visit_type, limit=limit)}
+        db, visit_type=visit_type, limit=limit)}
 
 
 @router.get("/preregs")
 def preregs(
-    facility_id: Optional[int] = None,
     status: Optional[str] = None,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
     return {"preregs": svc.list_preregs(
-        db, facility_id=facility_id, status=status, limit=limit)}
+        db, status=status, limit=limit)}
 
 
 @router.get("/exports")

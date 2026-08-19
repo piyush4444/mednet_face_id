@@ -21,7 +21,6 @@ const PatientProfile  = lazy(() => import("./pages/PatientProfile"));
 const History         = lazy(() => import("./pages/History"));
 const Cameras         = lazy(() => import("./pages/Cameras"));
 const FrontDesk       = lazy(() => import("./pages/FrontDesk"));
-const Facilities      = lazy(() => import("./pages/Facilities"));
 const Locations       = lazy(() => import("./pages/Locations"));
 const FrontDeskAdmin  = lazy(() => import("./pages/FrontDeskAdmin"));
 const AccountsAdmin   = lazy(() => import("./pages/AccountsAdmin"));
@@ -80,10 +79,8 @@ function AuthedApp() {
             <Guard perm="history.read"><History /></Guard>} />
 
           {/* Administration */}
-          <Route path="/facilities" element={
-            <Guard perm="facilities.manage"><Facilities /></Guard>} />
           <Route path="/locations" element={
-            <Guard perm="facilities.manage"><Locations /></Guard>} />
+            <Guard perm="locations.manage"><Locations /></Guard>} />
           <Route path="/cameras" element={
             <Guard perm="cameras.manage"><Cameras /></Guard>} />
           <Route path="/frontdesk-admin" element={

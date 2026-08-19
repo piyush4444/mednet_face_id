@@ -50,16 +50,14 @@ export const provisionAccount = (id, p) =>
   send(`/kiosk-admin/devices/${id}/account`, "POST", p);
 
 // ── Logs ───────────────────────────────────────────────────────────────
-export function listActivity({ facilityId, visitType, limit = 100 } = {}) {
+export function listActivity({ visitType, limit = 100 } = {}) {
   const q = new URLSearchParams();
-  if (facilityId) q.set("facility_id", facilityId);
   if (visitType) q.set("visit_type", visitType);
   q.set("limit", String(limit));
   return get(`/kiosk-admin/activity?${q}`);
 }
-export function listPreregs({ facilityId, status, limit = 100 } = {}) {
+export function listPreregs({ status, limit = 100 } = {}) {
   const q = new URLSearchParams();
-  if (facilityId) q.set("facility_id", facilityId);
   if (status) q.set("status", status);
   q.set("limit", String(limit));
   return get(`/kiosk-admin/preregs?${q}`);

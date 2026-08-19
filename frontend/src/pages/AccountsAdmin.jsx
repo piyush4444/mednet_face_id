@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "react-toastify";
 import {
   listAccounts,
+  listAccessCandidates,
   createAccount,
   updateAccount,
   patchAccountPermissions,
@@ -33,16 +34,22 @@ const ROLES = ["staff", "admin", "super_admin"];
 export default function AccountsAdmin() {
   const { role: myRole, reloadMe, account: me } = useAuth();
   const [accounts, setAccounts] = useState([]);
+  const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ username: "", password: "", role: "staff" });
+  const [form, setForm] = useState({ userId: "", username: "", password: "", role: "staff" });
 
   const canAssignPrivileged = myRole === "super_admin";
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setAccounts(await listAccounts());
+      const [accountRows, candidateRows] = await Promise.all([
+        listAccounts(),
+        listAccessCandidates(),
+      ]);
+      setAccounts(accountRows);
+      setCandidates(candidateRows);
     } catch (err) {
       toast.error(err?.message || "Failed to load accounts");
     } finally {
@@ -59,12 +66,13 @@ export default function AccountsAdmin() {
     setCreating(true);
     try {
       await createAccount({
+        userId: form.userId,
         username: form.username.trim(),
         password: form.password,
         role: form.role,
       });
-      toast.success(`Account “${form.username.trim()}” created`);
-      setForm({ username: "", password: "", role: "staff" });
+      toast.success(`Access enabled for “${form.username.trim()}”`);
+      setForm({ userId: "", username: "", password: "", role: "staff" });
       await refresh();
     } catch (err) {
       toast.error(err?.message || "Create failed");
@@ -100,14 +108,30 @@ export default function AccountsAdmin() {
     <div className="bg-card rounded-2xl shadow-md border border-primary/8 p-5">
       <h2 className="text-lg font-bold text-text-main mb-1">Accounts</h2>
       <p className="text-sm text-text-muted mb-5">
-        Manage staff logins and what each person can access.
+        Enable login access for registered employees and doctors, then assign permissions.
       </p>
 
       {/* Create */}
       <form
         onSubmit={onCreate}
-        className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto_auto] gap-2.5 mb-6 items-end"
+        className="grid grid-cols-1 sm:grid-cols-[1.3fr_1fr_1fr_auto_auto] gap-2.5 mb-6 items-end"
       >
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] font-bold text-text-muted uppercase">Registered user</span>
+          <select
+            value={form.userId}
+            onChange={(e) => setForm((f) => ({ ...f, userId: e.target.value }))}
+            required
+            className="px-3 py-2 rounded-lg bg-background border border-primary/10 text-text-main outline-none focus:border-primary/40"
+          >
+            <option value="">Select employee or doctor…</option>
+            {candidates.map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.name} · {user.user_type.toLowerCase()}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex flex-col gap-1">
           <span className="text-[11px] font-bold text-text-muted uppercase">Username</span>
           <input
@@ -168,7 +192,8 @@ export default function AccountsAdmin() {
               >
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <div className="flex items-center gap-2.5">
-                    <span className="font-bold text-text-main">{a.username}</span>
+                    <span className="font-bold text-text-main">{a.name}</span>
+                    <span className="text-xs text-text-muted">@{a.username}</span>
                     <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary capitalize">
                       {a.role.replace("_", " ")}
                     </span>

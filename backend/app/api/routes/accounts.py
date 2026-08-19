@@ -1,44 +1,22 @@
-"""
-accounts.py — login-account management (create / list / role / grants).
-
-Mounted at ``/auth/accounts`` and guarded by ``accounts.manage_staff`` at the
-router level. Because ``super_admin`` holds every permission (including
-``accounts.manage_staff``), that single router guard admits both admins and
-super_admins; the finer hierarchy — who may touch whom, and hand out which
-permission — is enforced per-request by the policy helpers in
-``auth_service`` (``assert_can_manage`` / ``assert_can_grant``).
-
-The actor is always the live logged-in account (``get_current_account``), so
-these endpoints require a session even while ``AUTH_ENABLED`` is False (the
-router-level permission guard is a no-op then, but you still must be logged
-in to administer accounts). Bootstrap the first super_admin with the CLI.
-"""
+"""Grant application access to canonical employee/doctor users."""
 
 from __future__ import annotations
-
-import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app.core.deps import (
-    get_current_account,
-    require_permission,
-    verify_csrf,
+from backend.app.core.deps import get_current_account, require_permission, verify_csrf
+from backend.app.db.auth_models import Permission, Role, UserCredential
+from backend.app.db.identity_models import (
+    PermissionMaster,
+    RoleMaster,
+    UserPermissionMapping,
+    UserRoleMapping,
 )
-from backend.app.db.auth_models import Permission, Role, StaffAccount
+from backend.app.db.models import User, UserType
 from backend.app.db.postgres import get_db
 from backend.app.services import audit_service, auth_service
-
-logger = logging.getLogger("backend.auth")
-
-
-def _client_ip(request) -> str:
-    xff = request.headers.get("x-forwarded-for") if request else None
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request and request.client else "unknown"
 
 router = APIRouter(
     prefix="/auth/accounts",
@@ -47,9 +25,11 @@ router = APIRouter(
 )
 
 
-# ── Schemas ──────────────────────────────────────────────────────────────
 class AccountOut(BaseModel):
     id: int
+    user_id: int
+    name: str
+    user_type: str
     username: str
     role: str
     is_active: bool
@@ -58,10 +38,18 @@ class AccountOut(BaseModel):
     effective_permissions: list[str]
 
 
+class CandidateOut(BaseModel):
+    id: int
+    name: str
+    user_type: str
+    employee_role: str | None
+
+
 class CreateAccountIn(BaseModel):
-    username: str = Field(..., min_length=1, max_length=64)
-    password: str = Field(..., min_length=8, max_length=256)
-    role: str = Field(..., description="staff | admin | super_admin")
+    user_id: int
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8, max_length=256)
+    role: str
 
 
 class UpdateAccountIn(BaseModel):
@@ -74,18 +62,11 @@ class PermissionsPatchIn(BaseModel):
     revoke: list[str] = Field(default_factory=list)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────
-def _to_out(acct: StaffAccount) -> AccountOut:
-    eff = sorted(p.value for p in auth_service.effective_permissions(acct))
-    return AccountOut(
-        id=acct.id,
-        username=acct.username,
-        role=acct.role,
-        is_active=acct.is_active,
-        granted_permissions=list(acct.granted_permissions or []),
-        revoked_permissions=list(acct.revoked_permissions or []),
-        effective_permissions=eff,
-    )
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _parse_role(raw: str) -> Role:
@@ -95,49 +76,87 @@ def _parse_role(raw: str) -> Role:
         raise HTTPException(status_code=400, detail=f"invalid role {raw!r}")
 
 
-def _parse_perm(raw: str) -> Permission:
+def _parse_permission(raw: str) -> Permission:
     try:
         return Permission(raw)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"invalid permission {raw!r}")
 
 
-def _assert_can_set_role(actor: StaffAccount, target_role: Role) -> None:
-    """Only manage_all (super_admin) may create/assign admin or super_admin."""
-    actor_perms = auth_service.effective_permissions(actor)
-    if target_role in (Role.ADMIN, Role.SUPER_ADMIN):
-        if Permission.ACCOUNTS_MANAGE_ALL not in actor_perms:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="only a super_admin may create or assign that role",
-            )
+def _target(db: Session, user_id: int) -> auth_service.AuthPrincipal:
+    target = auth_service.get_account(db, user_id, "human")
+    if target is None:
+        raise HTTPException(status_code=404, detail="user access not found")
+    return target
 
 
-def _get_target(db: Session, account_id: int) -> StaffAccount:
-    acct = auth_service.get_account(db, account_id)
-    if acct is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    return acct
+def _to_out(principal: auth_service.AuthPrincipal, db: Session) -> AccountOut:
+    return AccountOut(
+        id=principal.id,
+        user_id=principal.id,
+        name=principal.name or principal.username,
+        user_type=principal.user_type or "EMPLOYEE",
+        username=principal.username,
+        role=principal.role,
+        is_active=principal.is_active,
+        granted_permissions=list(principal.granted_permissions),
+        revoked_permissions=list(principal.revoked_permissions),
+        effective_permissions=sorted(
+            p.value for p in auth_service.effective_permissions(principal, db)
+        ),
+    )
 
 
-# ── Routes ───────────────────────────────────────────────────────────────
+def _can_assign(actor: auth_service.AuthPrincipal, role: Role, db: Session) -> None:
+    if role in {Role.ADMIN, Role.SUPER_ADMIN} and not auth_service.has_permission(
+        actor, Permission.ACCOUNTS_MANAGE_ALL, db
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only a superadmin may assign that role",
+        )
+
+
 @router.get("", response_model=list[AccountOut])
 def list_accounts(
-    actor: StaffAccount = Depends(get_current_account),
+    actor: auth_service.AuthPrincipal = Depends(get_current_account),
     db: Session = Depends(get_db),
 ):
-    """List accounts the actor may see.
+    credentials = db.query(UserCredential).order_by(UserCredential.id).all()
+    principals = [
+        auth_service.get_account(db, credential.user_id, "human")
+        for credential in credentials
+    ]
+    if not auth_service.has_permission(actor, Permission.ACCOUNTS_MANAGE_ALL, db):
+        principals = [p for p in principals if p and p.role == Role.STAFF.value]
+    return [_to_out(p, db) for p in principals if p]
 
-    Admins (manage_staff only) see staff accounts; super_admins (manage_all)
-    see everyone.
-    """
-    actor_perms = auth_service.effective_permissions(actor)
-    rows = db.query(StaffAccount).order_by(StaffAccount.id).all()
-    if Permission.ACCOUNTS_MANAGE_ALL in actor_perms:
-        visible = rows
-    else:
-        visible = [r for r in rows if r.role == Role.STAFF.value]
-    return [_to_out(r) for r in visible]
+
+@router.get("/candidates", response_model=list[CandidateOut])
+def access_candidates(
+    _actor: auth_service.AuthPrincipal = Depends(get_current_account),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(User)
+        .outerjoin(UserCredential, UserCredential.user_id == User.id)
+        .filter(
+            User.is_active.is_(True),
+            User.user_type.in_([UserType.EMPLOYEE.value, UserType.DOCTOR.value]),
+            UserCredential.id.is_(None),
+        )
+        .order_by(User.name)
+        .all()
+    )
+    return [
+        CandidateOut(
+            id=user.id,
+            name=user.name,
+            user_type=user.user_type,
+            employee_role=user.role,
+        )
+        for user in rows
+    ]
 
 
 @router.post("", response_model=AccountOut, status_code=201,
@@ -145,105 +164,121 @@ def list_accounts(
 def create_account_endpoint(
     payload: CreateAccountIn,
     request: Request,
-    actor: StaffAccount = Depends(get_current_account),
+    actor: auth_service.AuthPrincipal = Depends(get_current_account),
     db: Session = Depends(get_db),
 ):
-    target_role = _parse_role(payload.role)
-    _assert_can_set_role(actor, target_role)
+    role = _parse_role(payload.role)
+    _can_assign(actor, role, db)
     try:
-        acct = auth_service.create_account(
+        principal = auth_service.create_account(
             db,
+            user_id=payload.user_id,
             username=payload.username,
             password=payload.password,
-            role=target_role,
+            role=role,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     audit_service.record(
-        db, action="account.create", actor=actor, ip=_client_ip(request),
-        target_type="account", target_id=acct.id,
-        detail={"username": acct.username, "role": acct.role},
+        db,
+        action="account.create",
+        actor=actor,
+        ip=_client_ip(request),
+        target_type="user",
+        target_id=principal.id,
+        detail={"username": principal.username, "role": principal.role},
     )
-    return _to_out(acct)
+    return _to_out(principal, db)
 
 
-@router.patch("/{account_id}", response_model=AccountOut,
+@router.patch("/{user_id}", response_model=AccountOut,
               dependencies=[Depends(verify_csrf)])
 def update_account_endpoint(
-    account_id: int,
+    user_id: int,
     payload: UpdateAccountIn,
     request: Request,
-    actor: StaffAccount = Depends(get_current_account),
+    actor: auth_service.AuthPrincipal = Depends(get_current_account),
     db: Session = Depends(get_db),
 ):
-    """Change an account's role and/or active flag."""
-    target = _get_target(db, account_id)
+    target = _target(db, user_id)
     try:
-        auth_service.assert_can_manage(actor, target)
+        auth_service.assert_can_manage(actor, target, db)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
 
     if payload.role is not None:
-        new_role = _parse_role(payload.role)
-        _assert_can_set_role(actor, new_role)
-        target.role = new_role.value
+        role = _parse_role(payload.role)
+        _can_assign(actor, role, db)
+        role_row = db.query(RoleMaster).filter(RoleMaster.code == role.value).one()
+        mapping = db.query(UserRoleMapping).filter(UserRoleMapping.user_id == user_id).one()
+        mapping.role_id = role_row.id
     if payload.is_active is not None:
-        target.is_active = payload.is_active
-
+        credential = (
+            db.query(UserCredential).filter(UserCredential.user_id == user_id).one()
+        )
+        credential.is_active = payload.is_active
     db.commit()
-    db.refresh(target)
+    updated = _target(db, user_id)
     audit_service.record(
-        db, action="account.update", actor=actor, ip=_client_ip(request),
-        target_type="account", target_id=target.id,
-        detail={"role": target.role, "is_active": target.is_active},
+        db,
+        action="account.update",
+        actor=actor,
+        ip=_client_ip(request),
+        target_type="user",
+        target_id=user_id,
+        detail={"role": updated.role, "is_active": updated.is_active},
     )
-    return _to_out(target)
+    return _to_out(updated, db)
 
 
-@router.patch("/{account_id}/permissions", response_model=AccountOut,
+@router.patch("/{user_id}/permissions", response_model=AccountOut,
               dependencies=[Depends(verify_csrf)])
 def patch_permissions_endpoint(
-    account_id: int,
+    user_id: int,
     payload: PermissionsPatchIn,
     request: Request,
-    actor: StaffAccount = Depends(get_current_account),
+    actor: auth_service.AuthPrincipal = Depends(get_current_account),
     db: Session = Depends(get_db),
 ):
-    """Grant and/or revoke individual permissions on an account.
-
-    Each permission is checked against the grant hierarchy: an admin may only
-    touch permissions it itself holds and that are staff-grantable; a
-    super_admin may touch anything (subject to the manage rules).
-    """
-    target = _get_target(db, account_id)
-
-    grants = [_parse_perm(p) for p in payload.grant]
-    revokes = [_parse_perm(p) for p in payload.revoke]
-
-    # Authorise every change before applying any of them.
+    target = _target(db, user_id)
+    changes = [(_parse_permission(p), "GRANT") for p in payload.grant]
+    changes += [(_parse_permission(p), "REVOKE") for p in payload.revoke]
     try:
-        for perm in grants + revokes:
-            auth_service.assert_can_grant(actor, target, perm)
+        for permission, _effect in changes:
+            auth_service.assert_can_grant(actor, target, permission, db)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
 
-    granted = set(target.granted_permissions or [])
-    revoked = set(target.revoked_permissions or [])
-    for perm in grants:
-        granted.add(perm.value)
-        revoked.discard(perm.value)
-    for perm in revokes:
-        revoked.add(perm.value)
-        granted.discard(perm.value)
-
-    # Reassign (not mutate) so SQLAlchemy flags the JSONB columns dirty.
-    target.granted_permissions = sorted(granted)
-    target.revoked_permissions = sorted(revoked)
+    for permission, effect in changes:
+        permission_row = (
+            db.query(PermissionMaster)
+            .filter(PermissionMaster.code == permission.value)
+            .one()
+        )
+        row = (
+            db.query(UserPermissionMapping)
+            .filter(
+                UserPermissionMapping.user_id == user_id,
+                UserPermissionMapping.permission_id == permission_row.id,
+            )
+            .first()
+        )
+        if row is None:
+            row = UserPermissionMapping(
+                user_id=user_id, permission_id=permission_row.id, effect=effect
+            )
+            db.add(row)
+        else:
+            row.effect = effect
     db.commit()
-    db.refresh(target)
+    updated = _target(db, user_id)
     audit_service.record(
-        db, action="account.permissions", actor=actor, ip=_client_ip(request),
-        target_type="account", target_id=target.id,
+        db,
+        action="account.permissions",
+        actor=actor,
+        ip=_client_ip(request),
+        target_type="user",
+        target_id=user_id,
         detail={"grant": payload.grant, "revoke": payload.revoke},
     )
-    return _to_out(target)
+    return _to_out(updated, db)

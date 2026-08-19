@@ -58,6 +58,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Create an Iris login account.")
     parser.add_argument("--username", help="Login username (prompted if omitted).")
     parser.add_argument(
+        "--user-id",
+        type=int,
+        help="Existing employee/doctor user id that receives access.",
+    )
+    parser.add_argument(
         "--role",
         choices=[r.value for r in Role],
         default=Role.SUPER_ADMIN.value,
@@ -79,6 +84,9 @@ def main() -> int:
         return 2
 
     role = Role.STAFF if args.kiosk else Role(args.role)
+    if not args.kiosk and args.user_id is None:
+        print("--user-id is required for a human login.", file=sys.stderr)
+        return 2
     password = _prompt_password()
 
     # Ensure the table exists (first-run bootstrap).
@@ -86,14 +94,18 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        acct = auth_service.create_account(
-            db,
-            username=username,
-            password=password,
-            role=role,
-            granted=_KIOSK_GRANTED if args.kiosk else None,
-            revoked=_KIOSK_REVOKED if args.kiosk else None,
-        )
+        if args.kiosk:
+            acct = auth_service.create_kiosk_account(
+                db, username=username, password=password
+            )
+        else:
+            acct = auth_service.create_account(
+                db,
+                user_id=args.user_id,
+                username=username,
+                password=password,
+                role=role,
+            )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

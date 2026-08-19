@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends
 from backend.app.api.routes import (
     accounts, audit, auth, health, recognize, register, users, patients,
     tracking, ws, stream, history, metrics, metrics_clients, cameras,
-    frontdesk, frontdesk_admin, facilities, locations, kiosk, kiosk_admin,
+    frontdesk, frontdesk_admin, facility, locations, kiosk, kiosk_admin,
     integrations,
 )
 from backend.app.core.deps import require_permission, verify_csrf
@@ -77,13 +77,13 @@ router.include_router(
     frontdesk_admin.router, dependencies=_guard(P.FRONTDESK_ADMIN_MANAGE)
 )
 
-# ── B2B restructure: facilities/locations admin, kiosk, integrations ──────
+# ── Single-facility config, kiosk, integrations ──────────────────────────
 # NOTE: /kiosk runs on an unattended device. Until a kiosk device principal
 # exists (holding kiosk.operate), turning AUTH_ENABLED on would require a
 # logged-in front-desk session at the gate — create that principal before
 # enabling auth in a kiosk deployment.
-router.include_router(facilities.router, dependencies=_guard(P.FACILITIES_MANAGE))
-router.include_router(locations.router, dependencies=_guard(P.FACILITIES_MANAGE))
+router.include_router(facility.router, dependencies=_guard(P.LOCATIONS_MANAGE))
+router.include_router(locations.router, dependencies=_guard(P.LOCATIONS_MANAGE))
 router.include_router(kiosk.router, dependencies=_guard(P.KIOSK_OPERATE))
 router.include_router(kiosk_admin.router, dependencies=_guard(P.KIOSK_MANAGE))
 router.include_router(integrations.router, dependencies=_guard(P.INTEGRATIONS_MANAGE))

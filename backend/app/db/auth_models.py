@@ -1,37 +1,28 @@
 """
 auth_models.py — Login principals and the RBAC permission vocabulary.
 
-This is deliberately SEPARATE from ``app.db.models`` (the ``users`` table).
-That table holds recognition *subjects* — patients, doctors, visitors — who
-never log in. A :class:`StaffAccount` is a *login principal*: a human who
-authenticates to operate the system.
+Human identity lives only in ``app.db.models.User``. ``UserCredential`` is an
+optional one-to-one secret record for users who may sign in; ``ServiceAccount``
+represents non-human kiosk and integration principals.
 
 Permission model (see the ``auth-rbac`` skill for the full spec):
 
-* Every account has one :class:`Role`. A role is a *bundle* of default
+* Every principal has one :class:`Role`. A role is a *bundle* of default
   permissions (:data:`ROLE_DEFAULTS`).
-* On top of the role default, an account may carry per-account
-  ``granted_permissions`` (additions) and ``revoked_permissions``
-  (subtractions). This is what lets an admin hand a single staff member,
-  say, ``streams.view`` without promoting them.
+* Human overrides live in ``UserPermissionMapping``; non-human service
+  accounts store equivalent grant/revoke lists on their own row.
 * Effective permissions = role defaults ∪ granted − revoked. That set is
   computed in exactly one place — ``auth_service.effective_permissions`` —
   and both the API guards and ``GET /auth/me`` read from it.
 
-The stored token/cookie carries only the account id; role and permissions
-are recomputed from this row on every request, so a grant/revoke or a
-disable takes effect on the target's very next call with no re-login.
+The stored token/cookie carries only principal kind and id. Role and
+permissions are recomputed from the database on every request, so a change
+takes effect on the target's next call without requiring another login.
 """
 
 import enum
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    Integer,
-    String,
-)
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.app.db.postgres import Base
@@ -68,7 +59,7 @@ class Permission(str, enum.Enum):
     AUDIT_READ = "audit.read"                     # read the audit log
     BACKUP_MANAGE = "backup.manage"               # export / import (see backup skill)
     # ── B2B restructure surfaces ──
-    FACILITIES_MANAGE = "facilities.manage"       # facilities + locations CRUD
+    LOCATIONS_MANAGE = "locations.manage"         # singleton facility locations
     KIOSK_OPERATE = "kiosk.operate"               # /kiosk/* (front desk + kiosk device)
     KIOSK_MANAGE = "kiosk.manage"                 # /kiosk-admin/* — kiosk devices + logs
     INTEGRATIONS_MANAGE = "integrations.manage"   # /integrations/* status/flush/retry
@@ -99,7 +90,7 @@ _ADMIN_DEFAULTS = _STAFF_DEFAULTS | {
     P.ACCOUNTS_MANAGE_STAFF,
     P.AUDIT_READ,
     # Deployment config + outbound integration health are admin-tier.
-    P.FACILITIES_MANAGE,
+    P.LOCATIONS_MANAGE,
     P.INTEGRATIONS_MANAGE,
     # Kiosk devices + kiosk activity/pre-reg/attendance logs (PII).
     P.KIOSK_MANAGE,
@@ -126,36 +117,39 @@ STAFF_GRANTABLE: frozenset[Permission] = frozenset({
 })
 
 
-class StaffAccount(Base):
-    """A human login principal.
+class UserCredential(Base):
+    """Optional login secret for one canonical ``users`` row."""
 
-    ``granted_permissions`` / ``revoked_permissions`` store lists of
-    :class:`Permission` *values* (the dotted strings). They are applied on
-    top of the role default by ``auth_service.effective_permissions``.
-    """
-
-    __tablename__ = "staff_accounts"
+    __tablename__ = "user_credentials"
 
     id = Column(Integer, primary_key=True, index=True)
-
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
     username = Column(String(64), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-
-    role = Column(String(20), nullable=False, default=Role.STAFF.value, index=True)
-
     is_active = Column(Boolean, nullable=False, default=True)
-
-    # Per-account permission deltas over the role default. JSONB lists of
-    # permission strings. Default-empty via a server default so rows created
-    # by raw SQL are well-formed too.
-    granted_permissions = Column(JSONB, nullable=False, default=list)
-    revoked_permissions = Column(JSONB, nullable=False, default=list)
-
+    password_changed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=now_ist)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
-    def __repr__(self) -> str:  # pragma: no cover
-        return (
-            f"<StaffAccount id={self.id} username={self.username!r} "
-            f"role={self.role!r} active={self.is_active}>"
-        )
+
+class ServiceAccount(Base):
+    """Non-human principal used by a kiosk or external integration."""
+
+    __tablename__ = "service_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    principal_type = Column(String(20), nullable=False, default="KIOSK")
+    role = Column(String(20), nullable=False, default=Role.STAFF.value)
+    granted_permissions = Column(JSONB, nullable=False, default=list)
+    revoked_permissions = Column(JSONB, nullable=False, default=list)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)

@@ -14,7 +14,6 @@ import { useAuth } from "../hooks/useAuth";
 // Settings page isn't slowed down when the user isn't on that section.
 const Cameras = lazy(() => import("./Cameras"));
 const Patients = lazy(() => import("./Patients"));
-const Facilities = lazy(() => import("./Facilities"));
 const Locations = lazy(() => import("./Locations"));
 const AccountsAdmin = lazy(() => import("./AccountsAdmin"));
 
@@ -47,23 +46,10 @@ const SECTIONS = [
     component: Patients,
   },
   {
-    key: "facilities",
-    label: "Facilities",
-    description: "Sites & client integration IDs",
-    perm: "facilities.manage",
-    icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-      </svg>
-    ),
-    component: Facilities,
-  },
-  {
     key: "locations",
     label: "Locations",
-    description: "Floors, rooms & gates per facility",
-    perm: "facilities.manage",
+    description: "Floors, rooms & gates",
+    perm: "locations.manage",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}

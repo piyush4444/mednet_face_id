@@ -1,21 +1,4 @@
-"""
-auth_service.py — password hashing, session tokens, and the RBAC policy.
-
-Everything security-sensitive about accounts funnels through here so the
-policy lives in one auditable place:
-
-* Password hashing with argon2id (``argon2-cffi``).
-* Stateless session cookies signed with ``itsdangerous`` carrying ONLY the
-  account id (+ issue timestamp for TTL). No role/permission is baked into
-  the token — see ``effective_permissions``.
-* :func:`effective_permissions` — the single computation of a principal's
-  capabilities (role defaults ∪ granted − revoked).
-* :func:`assert_can_grant` — the hierarchy rules for who may hand which
-  permission to whom.
-* In-memory brute-force lockout keyed by (username, client-ip).
-
-The camera subsystem never imports this module; it is web-tier only.
-"""
+"""Authentication and authorization for human users and service principals."""
 
 from __future__ import annotations
 
@@ -25,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, InvalidHashError
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
 
@@ -35,45 +18,50 @@ from backend.app.db.auth_models import (
     STAFF_GRANTABLE,
     Permission,
     Role,
-    StaffAccount,
+    ServiceAccount,
+    UserCredential,
 )
+from backend.app.db.identity_models import (
+    PermissionMaster,
+    RoleMaster,
+    UserPermissionMapping,
+    UserRoleMapping,
+)
+from backend.app.db.models import User, UserType
 from backend.app.utils.time_ist import now_ist
 
 logger = logging.getLogger("backend.auth")
-
-# argon2id with library defaults — sane memory/time cost for a login path.
 _ph = PasswordHasher()
-
-# Cookie payload namespace. Rotating the salt invalidates all live sessions
-# without changing the secret.
-_SESSION_SALT = "iris.session.v1"
+_SESSION_SALT = "iris.session.v2"
 
 
-# ── Secret handling ──────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class AuthPrincipal:
+    """Resolved request actor; a human User or a non-human service account."""
+
+    kind: str
+    id: int
+    username: str
+    role: str
+    is_active: bool
+    granted_permissions: tuple[str, ...] = ()
+    revoked_permissions: tuple[str, ...] = ()
+    name: str | None = None
+    user_type: str | None = None
+
+
 def _get_secret() -> str:
-    """Return the signing secret, or fail loudly outside DEBUG.
-
-    A blank secret in production would let anyone forge a session cookie, so
-    we refuse to mint/verify tokens rather than fall back to a known value.
-    In DEBUG we allow a fixed dev secret purely so local work doesn't need a
-    .env — never rely on this off a developer machine.
-    """
-    secret = settings.SESSION_SECRET
-    if secret:
-        return secret
+    if settings.SESSION_SECRET:
+        return settings.SESSION_SECRET
     if settings.DEBUG:
         return "dev-insecure-session-secret-do-not-use-in-prod"
-    raise RuntimeError(
-        "SESSION_SECRET is not set. Refusing to sign session cookies with a "
-        "default. Set the SESSION_SECRET environment variable."
-    )
+    raise RuntimeError("SESSION_SECRET is not set")
 
 
 def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(_get_secret(), salt=_SESSION_SALT)
 
 
-# ── Password hashing ─────────────────────────────────────────────────────
 def hash_password(plain: str) -> str:
     return _ph.hash(plain)
 
@@ -86,54 +74,148 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def needs_rehash(hashed: str) -> bool:
-    """True if the stored hash was made with weaker params than current."""
     try:
         return _ph.check_needs_rehash(hashed)
     except Exception:  # noqa: BLE001
         return False
 
 
-# ── Session tokens (account-id only) ─────────────────────────────────────
-def mint_session_token(account_id: int) -> str:
-    """Sign ``{"aid": id}`` into a URL-safe, timestamped token."""
-    return _serializer().dumps({"aid": account_id})
+def mint_session_token(principal: AuthPrincipal) -> str:
+    return _serializer().dumps({"kind": principal.kind, "pid": principal.id})
 
 
-def read_session_token(token: str) -> int | None:
-    """Return the account id from a valid, unexpired token, else None."""
-    if not token:
-        return None
-    max_age = settings.SESSION_TTL_HOURS * 3600
+def read_session_token(token: str) -> tuple[str, int] | None:
     try:
-        data = _serializer().loads(token, max_age=max_age)
-    except (SignatureExpired, BadSignature):
-        return None
-    except Exception:  # noqa: BLE001
+        data = _serializer().loads(token, max_age=settings.SESSION_TTL_HOURS * 3600)
+    except (SignatureExpired, BadSignature, Exception):  # noqa: BLE001
         return None
     if not isinstance(data, dict):
         return None
-    aid = data.get("aid")
-    return aid if isinstance(aid, int) else None
+    kind, principal_id = data.get("kind"), data.get("pid")
+    if kind not in {"human", "service"} or not isinstance(principal_id, int):
+        return None
+    return kind, principal_id
 
 
-# ── Account lookup / creation ────────────────────────────────────────────
-def get_account(db: Session, account_id: int) -> StaffAccount | None:
-    return db.get(StaffAccount, account_id)
+def _permission_deltas(db: Session, user_id: int) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    rows = (
+        db.query(UserPermissionMapping, PermissionMaster.code)
+        .join(PermissionMaster, PermissionMaster.id == UserPermissionMapping.permission_id)
+        .filter(UserPermissionMapping.user_id == user_id)
+        .all()
+    )
+    granted = tuple(sorted(code for row, code in rows if row.effect == "GRANT"))
+    revoked = tuple(sorted(code for row, code in rows if row.effect == "REVOKE"))
+    return granted, revoked
 
 
-def get_account_by_username(db: Session, username: str) -> StaffAccount | None:
-    return (
-        db.query(StaffAccount)
-        .filter(StaffAccount.username == username)
-        .one_or_none()
+def principal_for_user(
+    db: Session, user: User, credential: UserCredential | None = None
+) -> AuthPrincipal | None:
+    credential = credential or (
+        db.query(UserCredential).filter(UserCredential.user_id == user.id).first()
+    )
+    if credential is None:
+        return None
+    role_code = (
+        db.query(RoleMaster.code)
+        .join(UserRoleMapping, UserRoleMapping.role_id == RoleMaster.id)
+        .filter(UserRoleMapping.user_id == user.id)
+        .scalar()
+    )
+    if role_code is None:
+        return None
+    granted, revoked = _permission_deltas(db, user.id)
+    return AuthPrincipal(
+        kind="human",
+        id=user.id,
+        username=credential.username,
+        role=role_code,
+        is_active=bool(user.is_active and credential.is_active),
+        granted_permissions=granted,
+        revoked_permissions=revoked,
+        name=user.name,
+        user_type=user.user_type,
     )
 
 
-# A kiosk device login is a STAFF account stripped to exactly the two
-# permissions the unattended kiosk needs. The single source of truth for
-# that delta — reused by the CLI (--kiosk) and the kiosk-device admin.
-KIOSK_GRANTED: list[str] = [Permission.STREAMS_VIEW.value]
-KIOSK_REVOKED: list[str] = [
+def principal_for_service(account: ServiceAccount) -> AuthPrincipal:
+    return AuthPrincipal(
+        kind="service",
+        id=account.id,
+        username=account.username,
+        role=account.role,
+        is_active=account.is_active,
+        granted_permissions=tuple(account.granted_permissions or []),
+        revoked_permissions=tuple(account.revoked_permissions or []),
+        name=account.username,
+        user_type=account.principal_type,
+    )
+
+
+def get_account(db: Session, principal_id: int, kind: str = "human") -> AuthPrincipal | None:
+    if kind == "service":
+        row = db.get(ServiceAccount, principal_id)
+        return principal_for_service(row) if row else None
+    user = db.get(User, principal_id)
+    return principal_for_user(db, user) if user else None
+
+
+def get_account_by_username(db: Session, username: str) -> AuthPrincipal | None:
+    credential = (
+        db.query(UserCredential)
+        .filter(UserCredential.username == username.strip())
+        .first()
+    )
+    if credential:
+        return principal_for_user(db, db.get(User, credential.user_id), credential)
+    service = (
+        db.query(ServiceAccount)
+        .filter(ServiceAccount.username == username.strip())
+        .first()
+    )
+    return principal_for_service(service) if service else None
+
+
+def _username_exists(db: Session, username: str) -> bool:
+    return bool(
+        db.query(UserCredential.id).filter(UserCredential.username == username).first()
+        or db.query(ServiceAccount.id).filter(ServiceAccount.username == username).first()
+    )
+
+
+def create_account(
+    db: Session, *, user_id: int, username: str, password: str, role: Role
+) -> AuthPrincipal:
+    username = username.strip()
+    if not username or len(password) < 8:
+        raise ValueError("username is required and password must be at least 8 characters")
+    if _username_exists(db, username):
+        raise ValueError(f"username {username!r} already exists")
+    user = db.get(User, user_id)
+    if user is None or not user.is_active:
+        raise ValueError("active user not found")
+    if user.user_type not in {UserType.EMPLOYEE.value, UserType.DOCTOR.value}:
+        raise ValueError("system access may only be assigned to an employee or doctor")
+    if db.query(UserCredential).filter(UserCredential.user_id == user_id).first():
+        raise ValueError("this user already has system access")
+    role_row = db.query(RoleMaster).filter(RoleMaster.code == role.value).first()
+    if role_row is None:
+        raise ValueError(f"role {role.value!r} is not initialized")
+    db.add(UserCredential(
+        user_id=user.id,
+        username=username,
+        password_hash=hash_password(password),
+        is_active=True,
+        password_changed_at=now_ist(),
+    ))
+    db.add(UserRoleMapping(user_id=user.id, role_id=role_row.id))
+    db.commit()
+    return principal_for_user(db, user)
+
+
+KIOSK_GRANTED = [Permission.STREAMS_VIEW.value]
+KIOSK_REVOKED = [
     Permission.FRONTDESK_OPERATE.value,
     Permission.USERS_READ.value,
     Permission.TRACKING_READ.value,
@@ -141,172 +223,93 @@ KIOSK_REVOKED: list[str] = [
 ]
 
 
-def create_kiosk_account(db: Session, *, username: str, password: str) -> StaffAccount:
-    """Create a minimal kiosk device login (kiosk.operate + streams.view)."""
-    return create_account(
-        db, username=username, password=password, role=Role.STAFF,
-        granted=KIOSK_GRANTED, revoked=KIOSK_REVOKED,
-    )
-
-
-def create_account(
-    db: Session,
-    *,
-    username: str,
-    password: str,
-    role: Role,
-    granted: list[str] | None = None,
-    revoked: list[str] | None = None,
-) -> StaffAccount:
-    """Create and persist an account. Raises ValueError on duplicate username.
-
-    ``granted`` / ``revoked`` are optional per-account permission deltas
-    over the role default (used e.g. to provision a minimal kiosk device
-    account). Callers pass permission *value* strings.
-    """
+def create_kiosk_account(db: Session, *, username: str, password: str) -> AuthPrincipal:
     username = username.strip()
-    if not username:
-        raise ValueError("username must not be empty")
-    if get_account_by_username(db, username) is not None:
+    if not username or len(password) < 8:
+        raise ValueError("username is required and password must be at least 8 characters")
+    if _username_exists(db, username):
         raise ValueError(f"username {username!r} already exists")
-    acct = StaffAccount(
+    row = ServiceAccount(
         username=username,
         password_hash=hash_password(password),
-        role=role.value,
-        is_active=True,
-        granted_permissions=list(granted or []),
-        revoked_permissions=list(revoked or []),
+        principal_type="KIOSK",
+        role=Role.STAFF.value,
+        granted_permissions=KIOSK_GRANTED,
+        revoked_permissions=KIOSK_REVOKED,
     )
-    db.add(acct)
+    db.add(row)
     db.commit()
-    db.refresh(acct)
-    return acct
+    db.refresh(row)
+    return principal_for_service(row)
 
 
-# ── Effective permissions (THE computation) ──────────────────────────────
-def _parse_perm_list(raw) -> set[Permission]:
-    out: set[Permission] = set()
-    for item in raw or []:
+def _parse_permissions(values) -> set[Permission]:
+    out = set()
+    for value in values or []:
         try:
-            out.add(Permission(item))
+            out.add(Permission(value))
         except ValueError:
-            # Unknown permission string (e.g. renamed in a later version).
-            # Ignore rather than crash the request.
-            logger.warning("Ignoring unknown permission %r on account", item)
+            logger.warning("ignoring unknown permission %r", value)
     return out
 
 
-def _role_default_permissions(
-    account: StaffAccount, db: Session | None
-) -> set[Permission]:
-    """Base permissions for the account's role.
-
-    Sourced from the DB catalog (``role_permission_mapping``) when a session
-    is supplied and the role is seeded there; otherwise falls back to the
-    in-code :data:`ROLE_DEFAULTS`. ``rbac_service.sync_catalog`` keeps the two
-    identical on boot, so the fallback never changes the answer — it only
-    covers the pre-seed / no-session paths.
-    """
+def effective_permissions(
+    principal: AuthPrincipal, db: Session | None = None
+) -> frozenset[Permission]:
+    codes = set()
     if db is not None:
         from backend.app.services import rbac_service
 
+        codes = rbac_service.role_permission_codes(db, principal.role)
+    if codes:
+        base = _parse_permissions(codes)
+    else:
         try:
-            codes = rbac_service.role_permission_codes(db, account.role)
-        except Exception as exc:  # noqa: BLE001
-            # Catalog unreadable (tables not yet created, DB hiccup, …).
-            # Never fail a permission check on it — fall through to the
-            # in-code defaults, which carry the same data.
-            logger.warning("RBAC catalog unreadable (%s); using ROLE_DEFAULTS", exc)
-            db.rollback()  # clear the failed transaction for later queries
-        else:
-            if codes:
-                return _parse_perm_list(codes)
-    role = _safe_role(account.role)
-    if role is None:
-        logger.error("Account %s has unknown role %r; no permissions",
-                     account.id, account.role)
-        return set()
-    return set(ROLE_DEFAULTS.get(role, frozenset()))
-
-
-def effective_permissions(
-    account: StaffAccount, db: Session | None = None
-) -> frozenset[Permission]:
-    """Role defaults ∪ granted − revoked. The one place this is computed.
-
-    Pass ``db`` to source the role bundle from the DB RBAC catalog; without
-    it the in-code :data:`ROLE_DEFAULTS` is used (identical data).
-    """
-    base = _role_default_permissions(account, db)
-    base |= _parse_perm_list(account.granted_permissions)
-    base -= _parse_perm_list(account.revoked_permissions)
+            base = set(ROLE_DEFAULTS.get(Role(principal.role), frozenset()))
+        except ValueError:
+            base = set()
+    base |= _parse_permissions(principal.granted_permissions)
+    base -= _parse_permissions(principal.revoked_permissions)
     return frozenset(base)
 
 
 def has_permission(
-    account: StaffAccount, perm: Permission, db: Session | None = None
+    principal: AuthPrincipal, permission: Permission, db: Session | None = None
 ) -> bool:
-    return perm in effective_permissions(account, db)
+    return permission in effective_permissions(principal, db)
 
 
-# ── Grant hierarchy policy ───────────────────────────────────────────────
-def assert_can_manage(actor: StaffAccount, target: StaffAccount) -> None:
-    """Raise PermissionError unless ``actor`` may administer ``target``.
-
-    * super_admin (accounts.manage_all) may manage anyone below super_admin.
-    * admin (accounts.manage_staff) may manage staff accounts only.
-    * nobody may manage their own account (no self-escalation / self-lockout
-      via this path — password change is a separate, self-only flow).
-    """
-    if actor.id == target.id:
-        raise PermissionError("cannot manage your own account here")
-
-    actor_perms = effective_permissions(actor)
-    target_role = _safe_role(target.role)
-
+def assert_can_manage(
+    actor: AuthPrincipal, target: AuthPrincipal, db: Session | None = None
+) -> None:
+    if actor.kind != "human":
+        raise PermissionError("service accounts cannot manage users")
+    if actor.id == target.id and actor.kind == target.kind:
+        raise PermissionError("cannot manage your own access here")
+    actor_perms = effective_permissions(actor, db)
     if Permission.ACCOUNTS_MANAGE_ALL in actor_perms:
-        if target_role == Role.SUPER_ADMIN:
-            raise PermissionError("cannot manage another super_admin")
+        if target.role == Role.SUPER_ADMIN.value:
+            raise PermissionError("cannot manage another superadmin")
         return
-    if Permission.ACCOUNTS_MANAGE_STAFF in actor_perms:
-        if target_role != Role.STAFF:
-            raise PermissionError("admins may only manage staff accounts")
+    if Permission.ACCOUNTS_MANAGE_STAFF in actor_perms and target.role == Role.STAFF.value:
         return
-    raise PermissionError("insufficient rights to manage accounts")
+    raise PermissionError("insufficient rights to manage this user")
 
 
 def assert_can_grant(
-    actor: StaffAccount, target: StaffAccount, perm: Permission
+    actor: AuthPrincipal,
+    target: AuthPrincipal,
+    permission: Permission,
+    db: Session | None = None,
 ) -> None:
-    """Raise PermissionError unless ``actor`` may grant ``perm`` to ``target``.
-
-    Enforces the no-escalation-by-proxy rule: an admin may only grant a
-    permission it itself holds, and only from :data:`STAFF_GRANTABLE`.
-    super_admin may grant anything (subject to :func:`assert_can_manage`).
-    """
-    assert_can_manage(actor, target)
-    actor_perms = effective_permissions(actor)
-
+    assert_can_manage(actor, target, db)
+    actor_perms = effective_permissions(actor, db)
     if Permission.ACCOUNTS_MANAGE_ALL in actor_perms:
-        return  # super_admin — unrestricted within manage rules
-    # admin path
-    if perm not in STAFF_GRANTABLE:
-        raise PermissionError(f"{perm.value} is not grantable to staff")
-    if perm not in actor_perms:
-        raise PermissionError(f"cannot grant {perm.value} you do not hold")
+        return
+    if permission not in STAFF_GRANTABLE or permission not in actor_perms:
+        raise PermissionError(f"{permission.value} is not grantable to staff")
 
 
-def _safe_role(raw: str) -> Role | None:
-    try:
-        return Role(raw)
-    except ValueError:
-        return None
-
-
-# ── Brute-force lockout (in-memory, single-process) ──────────────────────
-# The camera invariant forbids multiple uvicorn workers, so a single process
-# owns all login traffic and an in-memory map is sufficient. Resets on
-# restart, which is acceptable for a throttle. Keyed by (username, ip).
 @dataclass
 class _Attempts:
     count: int = 0
@@ -318,25 +321,22 @@ _attempts_lock = threading.Lock()
 
 
 def is_locked_out(username: str, ip: str) -> bool:
-    key = (username, ip)
     with _attempts_lock:
-        rec = _attempts.get(key)
-        if rec is None or rec.locked_until is None:
+        record = _attempts.get((username, ip))
+        if record is None or record.locked_until is None:
             return False
-        if now_ist() >= rec.locked_until:
-            # Window elapsed — clear and allow.
-            _attempts.pop(key, None)
+        if now_ist() >= record.locked_until:
+            _attempts.pop((username, ip), None)
             return False
         return True
 
 
 def record_login_failure(username: str, ip: str) -> None:
-    key = (username, ip)
     with _attempts_lock:
-        rec = _attempts.setdefault(key, _Attempts())
-        rec.count += 1
-        if rec.count >= settings.LOGIN_MAX_ATTEMPTS:
-            rec.locked_until = now_ist() + timedelta(
+        record = _attempts.setdefault((username, ip), _Attempts())
+        record.count += 1
+        if record.count >= settings.LOGIN_MAX_ATTEMPTS:
+            record.locked_until = now_ist() + timedelta(
                 minutes=settings.LOGIN_LOCKOUT_MINUTES
             )
 
@@ -346,23 +346,38 @@ def record_login_success(username: str, ip: str) -> None:
         _attempts.pop((username, ip), None)
 
 
-# ── Authentication ───────────────────────────────────────────────────────
 def authenticate(
     db: Session, *, username: str, password: str, ip: str
-) -> StaffAccount | None:
-    """Verify credentials. Returns the account on success, else None.
+) -> AuthPrincipal | None:
+    credential = (
+        db.query(UserCredential)
+        .filter(UserCredential.username == username.strip())
+        .first()
+    )
+    if credential:
+        user = db.get(User, credential.user_id)
+        principal = principal_for_user(db, user, credential) if user else None
+        if not principal or not principal.is_active or not verify_password(
+            password, credential.password_hash
+        ):
+            return None
+        if needs_rehash(credential.password_hash):
+            credential.password_hash = hash_password(password)
+        credential.last_login_at = now_ist()
+        db.commit()
+        return principal_for_user(db, user, credential)
 
-    Callers must check :func:`is_locked_out` first and record failure /
-    success via the helpers so the throttle stays accurate. Transparently
-    upgrades the stored hash if argon2 params have strengthened.
-    """
-    acct = get_account_by_username(db, username)
-    if acct is None or not acct.is_active:
+    service = (
+        db.query(ServiceAccount)
+        .filter(ServiceAccount.username == username.strip())
+        .first()
+    )
+    if not service or not service.is_active or not verify_password(
+        password, service.password_hash
+    ):
         return None
-    if not verify_password(password, acct.password_hash):
-        return None
-    if needs_rehash(acct.password_hash):
-        acct.password_hash = hash_password(password)
-    acct.last_login_at = now_ist()
+    if needs_rehash(service.password_hash):
+        service.password_hash = hash_password(password)
+    service.last_login_at = now_ist()
     db.commit()
-    return acct
+    return principal_for_service(service)

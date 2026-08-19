@@ -5,7 +5,7 @@ Phase 1 of the auth build. These endpoints are always mounted, but until
 ``settings.AUTH_ENABLED`` is True nothing else in the app is guarded, so the
 demo keeps working while the login UI is built.
 
-Session model: an HttpOnly, signed cookie carrying only the account id.
+Session model: an HttpOnly, signed cookie carrying principal kind and id.
 A second, non-HttpOnly CSRF cookie is set alongside for the double-submit
 check on mutating requests (see ``core/deps.verify_csrf``).
 """
@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.core.deps import CSRF_COOKIE_NAME, get_current_account
-from backend.app.db.auth_models import StaffAccount
 from backend.app.db.postgres import get_db
 from backend.app.services import audit_service, auth_service
 
@@ -49,9 +48,11 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _set_session_cookies(response: Response, account: StaffAccount) -> str:
+def _set_session_cookies(
+    response: Response, account: auth_service.AuthPrincipal
+) -> str:
     """Set the session + CSRF cookies. Returns the CSRF token."""
-    token = auth_service.mint_session_token(account.id)
+    token = auth_service.mint_session_token(account)
     max_age = settings.SESSION_TTL_HOURS * 3600
     response.set_cookie(
         key=settings.SESSION_COOKIE_NAME,
@@ -80,8 +81,10 @@ def _clear_session_cookies(response: Response) -> None:
     response.delete_cookie(CSRF_COOKIE_NAME, path="/")
 
 
-def _me_payload(account: StaffAccount) -> MeOut:
-    perms = sorted(p.value for p in auth_service.effective_permissions(account))
+def _me_payload(
+    account: auth_service.AuthPrincipal, db: Session
+) -> MeOut:
+    perms = sorted(p.value for p in auth_service.effective_permissions(account, db))
     return MeOut(
         id=account.id,
         username=account.username,
@@ -140,7 +143,7 @@ def login(
     auth_service.record_login_success(username, ip)
     audit_service.record(db, action="auth.login", actor=account, ip=ip)
     _set_session_cookies(response, account)
-    return _me_payload(account)
+    return _me_payload(account, db)
 
 
 @router.post("/logout")
@@ -151,9 +154,12 @@ def logout(response: Response):
 
 
 @router.get("/me", response_model=MeOut)
-def me(account: StaffAccount = Depends(get_current_account)):
+def me(
+    account: auth_service.AuthPrincipal = Depends(get_current_account),
+    db: Session = Depends(get_db),
+):
     """Return the current account + its effective permissions.
 
     401 when unauthenticated — the SPA treats that as 'show login'.
     """
-    return _me_payload(account)
+    return _me_payload(account, db)

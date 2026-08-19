@@ -106,6 +106,10 @@ DATABASE_URL="postgresql://facedb:facedb@localhost:5432/facedb"
 ALLOWED_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
 AUTH_ENABLED=false
 START_CAMERA_SYSTEM=0
+BOOTSTRAP_FACILITY_NAME="Mednet"
+BOOTSTRAP_SUPERADMIN_NAME="Mednet Superadmin"
+BOOTSTRAP_SUPERADMIN_USERNAME="superadmin"
+BOOTSTRAP_SUPERADMIN_PASSWORD="replace-with-at-least-8-characters"
 ```
 
 Leave both `CLIENT_*_API_URL` variables empty during local development unless
@@ -127,13 +131,14 @@ SESSION_SECRET="paste-the-generated-value-here"
 SESSION_COOKIE_SECURE=false
 ```
 
-Create the first administrator after the database is reachable:
+Create the singleton facility and first superadmin after PostgreSQL is reachable:
 
 ```bash
-python -m backend.scripts.create_account --username admin --role super_admin
+python -m backend.scripts.seed_initial
 ```
 
-The command prompts for the password without putting it in shell history.
+The command is idempotent and never prints or rotates the configured password.
+Remove `BOOTSTRAP_SUPERADMIN_PASSWORD` from the runtime environment after seeding.
 
 ## 5. Start the backend
 
@@ -192,10 +197,10 @@ After both processes are running:
 
 1. Open the frontend.
 2. If authentication is enabled, sign in with the administrator account.
-3. Create a facility and location if testing multi-facility behavior.
+3. Create locations as needed; the Mednet facility is resolved automatically.
 4. Add a camera under the camera settings, or continue without cameras.
 5. Register a test identity using several face angles.
-6. Test recognition, front-desk, facility mapping, or kiosk flows as needed.
+6. For an employee/doctor, enable application access under Accounts & RBAC.
 
 Do not use real patient data or production API credentials in a local database.
 Profile photos and face indexes under `database/` are biometric data.

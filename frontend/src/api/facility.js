@@ -1,9 +1,5 @@
 /**
- * facilities.js — typed wrappers around /api/v1/facilities endpoints.
- *
- * Facilities are the hospitals / sites this deployment serves; each row
- * carries the client-HIS identifiers (facilityGuid, companyID) used by
- * the outbound integrations.
+ * facility.js — singleton facility and location API wrappers.
  */
 import { API_URL } from "../config";
 
@@ -47,44 +43,16 @@ async function jsonOrThrow(res) {
   return body;
 }
 
-export async function listFacilities({ includeInactive = false } = {}) {
-  const res = await fetch(
-    `${API_URL}/facilities?include_inactive=${includeInactive}`,
-    { headers: { "ngrok-skip-browser-warning": "true" } },
-  );
-  return jsonOrThrow(res);
-}
-
-export async function createFacility(payload) {
-  const res = await fetch(`${API_URL}/facilities`, {
-    method: "POST",
-    headers: HEADERS_JSON,
-    body: JSON.stringify(payload),
-  });
-  return jsonOrThrow(res);
-}
-
-export async function patchFacility(id, payload) {
-  const res = await fetch(`${API_URL}/facilities/${id}`, {
-    method: "PATCH",
-    headers: HEADERS_JSON,
-    body: JSON.stringify(payload),
-  });
-  return jsonOrThrow(res);
-}
-
-export async function deleteFacility(id) {
-  const res = await fetch(`${API_URL}/facilities/${id}`, {
-    method: "DELETE",
-    headers: HEADERS_JSON,
+export async function getFacility() {
+  const res = await fetch(`${API_URL}/facility`, {
+    headers: { "ngrok-skip-browser-warning": "true" },
   });
   return jsonOrThrow(res);
 }
 
 // ── Locations (LOCATION_MASTER) ──────────────────────────────────────────
-export async function listLocations({ facilityId, includeInactive = false } = {}) {
+export async function listLocations({ includeInactive = false } = {}) {
   const q = new URLSearchParams();
-  if (facilityId) q.set("facility_id", facilityId);
   q.set("include_inactive", String(includeInactive));
   const res = await fetch(`${API_URL}/locations?${q}`, {
     headers: { "ngrok-skip-browser-warning": "true" },
