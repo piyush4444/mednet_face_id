@@ -1,0 +1,274 @@
+@import "tailwindcss";
+
+/* Class-based dark mode: `dark:` utilities apply when `.dark` is on <html>.
+   The class is set pre-paint by the inline script in index.html and kept in
+   sync by src/store/themeStore.js. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* ── Core Palette ── */
+  --color-primary: #7C3AED;
+  --color-primary-light: #A78BFA;
+  --color-primary-dark: #6D28D9;
+  --color-secondary: #EDE9FE;
+  --color-accent: #F472B6;
+  --color-accent-light: #FBCFE8;
+  --color-success: #34D399;
+  --color-success-light: #D1FAE5;
+  --color-warning: #FBBF24;
+  --color-danger: #F87171;
+
+  /* ── Surfaces ── */
+  --color-background: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-card-hover: #FAFBFF;
+
+  /* ── Text ── */
+  --color-text-main: #0F172A;
+  --color-text-muted: #64748B;
+  --color-text-light: #94A3B8;
+
+  /* ── Custom Animations ── */
+  --animate-fade-in: fade-in 0.35s ease-out both;
+  --animate-slide-up: slide-up 0.35s ease-out both;
+  --animate-slide-down: slide-down 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-scale-in: scale-in 0.2s ease-out both;
+  --animate-shimmer: shimmer 1.5s ease-in-out infinite;
+  --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
+  --animate-stagger: fade-in 0.3s ease-out both;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slide-down {
+    from { opacity: 0; transform: translateY(-16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes scale-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+}
+
+/* ── Dark theme ──
+   Utilities like `bg-card` compile to var(--color-card), so overriding the
+   variables under `.dark` re-skins every semantic-token usage at once.
+   Only literal colors (bg-white, pastel chips, …) need explicit `dark:`
+   variants at the call site. */
+@layer base {
+  .dark {
+    color-scheme: dark;
+
+    /* Core palette — primary shifts one step lighter for contrast on dark */
+    --color-primary: #8B5CF6;
+    --color-primary-light: #A78BFA;
+    --color-primary-dark: #7C3AED;
+    --color-secondary: #2E2749;
+    --color-accent: #F472B6;
+    --color-accent-light: #58203E;
+    --color-success: #34D399;
+    --color-success-light: #123B2E;
+    --color-warning: #FBBF24;
+    --color-danger: #F87171;
+
+    /* Surfaces — near-black with a subtle violet cast */
+    --color-background: #0B0D14;
+    --color-card: #131722;
+    --color-card-hover: #1A1F2E;
+
+    /* Text */
+    --color-text-main: #F1F5F9;
+    --color-text-muted: #94A3B8;
+    --color-text-light: #64748B;
+  }
+}
+
+/* ── Base Styles ── */
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-text-main);
+    font-family: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Selection styling */
+  ::selection {
+    background-color: var(--color-primary);
+    color: white;
+  }
+
+  /* Smooth scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-text-light);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-muted);
+  }
+  
+  /* Firefox scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-text-light) transparent;
+  }
+}
+
+/* ── Utility Classes ── */
+@layer utilities {
+  .glass {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .glass-strong {
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+
+  .dark .glass {
+    background: rgba(19, 23, 34, 0.85);
+  }
+
+  .dark .glass-strong {
+    background: rgba(11, 13, 20, 0.92);
+  }
+
+  .gradient-primary {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+  }
+
+  .gradient-hero {
+    background: linear-gradient(135deg, var(--color-primary) 0%, #8B5CF6 50%, var(--color-accent) 100%);
+  }
+
+  .text-gradient {
+    background: linear-gradient(135deg, var(--color-primary) 0%, #8B5CF6 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Skeleton loading shimmer */
+  .skeleton {
+    background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+
+  .dark .skeleton {
+    background: linear-gradient(90deg, #1a1f2e 25%, #232a3d 50%, #1a1f2e 75%);
+    background-size: 200% 100%;
+  }
+}
+
+/* ── Hide scrollbar utility ──
+   Scrolling stays functional; just the visible bar is removed.
+   Used by panes that have their own scroll inside an already
+   visually-busy layout (e.g. patient history sessions/visits list). */
+.no-scrollbar {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* IE / old Edge */
+}
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;                  /* Chrome / Safari / new Edge */
+}
+
+/* ── Print: OPD token slip ──
+   The .print-slip element is hidden on screen and shown only when
+   window.print() is invoked. Everything else in the page is hidden so
+   thermal printers produce a clean slip. */
+.print-slip { display: none; }
+
+@media print {
+  body * { visibility: hidden !important; }
+  .print-slip, .print-slip * { visibility: visible !important; }
+  .print-slip {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 80mm;
+    padding: 6mm 5mm;
+    font-family: ui-monospace, "Courier New", monospace;
+    color: #000;
+  }
+  .print-slip .ps-title {
+    font-size: 11pt;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: 0.15em;
+    border-bottom: 1px dashed #000;
+    padding-bottom: 4pt;
+    margin-bottom: 6pt;
+  }
+  .print-slip .ps-token {
+    font-size: 36pt;
+    font-weight: 800;
+    text-align: center;
+    line-height: 1.1;
+    margin: 4pt 0;
+  }
+  .print-slip .ps-name {
+    text-align: center;
+    font-size: 12pt;
+    font-weight: 700;
+  }
+  .print-slip .ps-sub {
+    text-align: center;
+    font-size: 9pt;
+    margin-bottom: 6pt;
+  }
+  .print-slip .ps-row {
+    font-size: 10pt;
+    margin: 2pt 0;
+    border-bottom: 1px dotted #888;
+    padding-bottom: 2pt;
+  }
+  .print-slip .ps-qr {
+    margin-top: 6pt;
+    text-align: center;
+  }
+  .print-slip .ps-qr img {
+    width: 28mm;
+    height: 28mm;
+    display: inline-block;
+  }
+  .print-slip .ps-foot {
+    margin-top: 8pt;
+    text-align: center;
+    font-size: 8pt;
+    color: #444;
+  }
+  @page { size: 80mm auto; margin: 0; }
+}

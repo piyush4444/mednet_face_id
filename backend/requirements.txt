@@ -1,0 +1,51 @@
+# Face Recognition Pipeline — Dependencies
+# ─────────────────────────────────────────
+
+# ── Core Libraries ──
+opencv-python>=4.8.0     # For camera capture, image processing, and display
+numpy>=1.24.0            # For array manipulation and embedding math
+
+# ── Face Detection & Recognition (InsightFace) ──
+# onnxruntime-gpu MUST stay on a CUDA 12 build: 1.27+ links libcudart.so.13
+# (CUDA 13) and fails to import against the cu12 wheels pinned below.
+# 1.22.0 is verified working on the production L4 VPS.
+onnxruntime-gpu>=1.16.0,<1.23   # For NVIDIA GPUs (CUDA 12 + cuDNN 9 builds)
+insightface>=0.7.3       # For production detection and embedding (ArcFace/YOLO)
+# NOTE: insightface declares a dependency on the CPU 'onnxruntime' package;
+# pip installs it alongside onnxruntime-gpu and the CPU wheel clobbers the
+# shared module files, silently downgrading inference to CPU. After installing,
+# uninstall the CPU wheel and force-reinstall onnxruntime-gpu with `--no-deps`.
+
+# ── CUDA 12 Runtime (pip wheels, for onnxruntime-gpu) ──
+# These provide the CUDA/cuDNN libraries onnxruntime-gpu needs at runtime,
+# so only the NVIDIA driver is required on the host — no system CUDA toolkit.
+# Windows: engine/pipeline/embedding.py registers the wheel DLL dirs.
+# Linux: add the pip wheel library directories to `LD_LIBRARY_PATH`.
+# Not needed if you have CUDA Toolkit 12.x + cuDNN 9 installed system-wide.
+nvidia-cublas-cu12>=12.4
+nvidia-cuda-runtime-cu12>=12.4
+nvidia-cuda-nvrtc-cu12>=12.4
+nvidia-cudnn-cu12>=9.0
+nvidia-cufft-cu12>=11.0
+nvidia-curand-cu12>=10.3
+nvidia-cusparse-cu12>=12.3
+nvidia-cusolver-cu12>=11.6
+
+# ── Vector Database (FAISS) ──
+faiss-cpu>=1.7.4             # Exact inner-product search (cosine sim on normalized vectors)
+# faiss-gpu>=1.7.4           # For NVIDIA GPUs (swap with faiss-cpu if needed)
+
+# ── FastAPI Backend ──
+fastapi>=0.110.0             # Web framework
+uvicorn[standard]>=0.27.0    # ASGI server (standard pulls in websockets/httptools)
+python-multipart>=0.0.9      # Required by FastAPI for UploadFile / Form fields
+pydantic>=2.6.0              # Data validation (already pulled in by fastapi, pinned here)
+pydantic-settings>=2.2.0     # Env-var-driven Settings class
+
+# ── Relational Database (PostgreSQL via SQLAlchemy) ──
+SQLAlchemy>=2.0.0            # ORM + engine
+psycopg2-binary>=2.9.9       # PostgreSQL driver (binary wheel — no build toolchain needed)
+
+# ── Auth / RBAC ──
+argon2-cffi>=23.1.0         # Password hashing (argon2id) — preferred over bcrypt/passlib
+itsdangerous>=2.1.0        # Signed, timestamped session cookies (account-id only)

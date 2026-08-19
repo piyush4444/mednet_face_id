@@ -1,0 +1,72 @@
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.python-version
+
+# ── Node / Vite ────────────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+
+# ── Logs ──────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ── Editor / OS ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── Tooling local state ───────────────────────────────────────────────
+# Claude Code per-user state — the leading-dot variant the IDE writes.
+# Ignore everything under .claude EXCEPT shared skills, which are committed
+# so teammates get them on checkout. Using `.claude/*` (not `.claude/`) means
+# the directory itself isn't excluded, so the `!` carve-out below can
+# re-include the skills subtree.
+.claude/*
+!.claude/skills/
+.coverage
+htmlcov/
+
+# ── Build outputs ─────────────────────────────────────────────────────
+build/
+*.tar.gz
+
+# NOTE: most dataSet/ and database/ fixtures are intentionally tracked in
+# this private repo so teammates clone a working snapshot. Sensitive runtime
+# artifacts have explicit exceptions below; put new secrets in .env.
+#
+# Frontend env files: .env.production is tracked (it's baked into the
+# deployed bundle — public by design). .env (host-specific) is NOT
+# tracked anymore, so a server's local copy survives `git pull`.
+.env
+.env.*
+!.env.example
+
+# Profile photos are biometric PII — never commit them, even though the
+# rest of database/ is tracked (see NOTE above).
+database/media/
+# Legacy camera migration input may contain RTSP credentials. PostgreSQL is
+# now the runtime source of truth; never add a new local roster to Git.
+database/cameras.json
+!frontend/.env.production
+*.pem
+*.key
+notes.txt

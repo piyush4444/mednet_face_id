@@ -1,0 +1,36 @@
+# Face Recognition Pipeline — CPU-only Dependencies
+# ──────────────────────────────────────────────────
+# Use this file on machines without an NVIDIA GPU:
+#   pip install -r requirements-cpu.txt
+#
+# IMPORTANT: After install, edit backend/config.py and set:
+#   GPU_ENABLED = False
+#   GPU_DEVICE_ID = -1
+# Without this, InsightFace will still try CUDA at startup (ctx_id=0)
+# and log a warning before falling back to CPU.
+
+# ── Core Libraries ──
+opencv-python>=4.8.0     # For camera capture, image processing, and display
+numpy>=1.24.0            # For array manipulation and embedding math
+
+# ── Face Detection & Recognition (InsightFace, CPU) ──
+onnxruntime>=1.16.0      # CPU-only ONNX Runtime (no CUDA DLLs needed)
+insightface>=0.7.3       # Production detection and embedding (ArcFace/YOLO)
+
+# ── Vector Database (FAISS, CPU) ──
+faiss-cpu>=1.7.4         # Exact inner-product search (cosine sim on normalized vectors)
+
+# ── FastAPI Backend ──
+fastapi>=0.110.0             # Web framework
+uvicorn[standard]>=0.27.0    # ASGI server (standard pulls in websockets/httptools)
+python-multipart>=0.0.9      # Required by FastAPI for UploadFile / Form fields
+pydantic>=2.6.0              # Data validation (already pulled in by fastapi, pinned here)
+pydantic-settings>=2.2.0     # Env-var-driven Settings class
+
+# ── Relational Database (PostgreSQL via SQLAlchemy) ──
+SQLAlchemy>=2.0.0            # ORM + engine
+psycopg2-binary>=2.9.9       # PostgreSQL driver (binary wheel — no build toolchain needed)
+
+# ── Auth / RBAC ──
+argon2-cffi>=23.1.0         # Password hashing (argon2id) — preferred over bcrypt/passlib
+itsdangerous>=2.1.0        # Signed, timestamped session cookies (account-id only)
