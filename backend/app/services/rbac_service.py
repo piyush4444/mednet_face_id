@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from backend.app.db.auth_models import ROLE_DEFAULTS, Permission, Role
+from backend.app.db.auth_models import ROLE_DEFAULTS, Permission, Role, ServiceAccount
 from backend.app.db.identity_models import (
     PermissionMaster,
     RoleMaster,
@@ -87,6 +87,23 @@ def sync_catalog(db: Session) -> None:
                 ))
             db.delete(link)
         legacy.is_active = False
+
+    # Kiosk is shelved on main. Retire its catalog entries and disable old
+    # device principals so a preserved kiosk credential cannot retain stream
+    # access after the routes and UI have been removed.
+    for retired_code in ("kiosk.operate", "kiosk.manage"):
+        retired = db.query(PermissionMaster).filter(
+            PermissionMaster.code == retired_code
+        ).first()
+        if retired is None:
+            continue
+        db.query(RolePermissionMapping).filter(
+            RolePermissionMapping.permission_id == retired.id
+        ).delete(synchronize_session=False)
+        retired.is_active = False
+    db.query(ServiceAccount).filter(
+        ServiceAccount.principal_type == "KIOSK"
+    ).update({ServiceAccount.is_active: False}, synchronize_session=False)
 
     # ── Role → permission bundles (first-time seed per role only) ──
     for role in Role:

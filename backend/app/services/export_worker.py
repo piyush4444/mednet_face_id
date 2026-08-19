@@ -5,16 +5,13 @@ A single daemon thread drains two outbound queues:
 
 - ``punch_export_queue``  → client attendance API (staff punches).
 - ``pre_registration_log`` (rows still PENDING/FAILED) → client HIS.
-  The common case is pushed *inline* by the kiosk so the token shows
-  immediately; this worker is the retry safety net for inline failures
-  and for rows created while the integration was disabled.
 
 Reliability model
 -----------------
 - **Claim before send**: a row is flipped to ``SENDING`` with an atomic
   ``UPDATE … WHERE status IN (PENDING, FAILED)`` (rowcount == 1) before
-  the HTTP call, so no other worker/thread — or the inline kiosk path —
-  can double-send it. A row stuck in ``SENDING`` (crash mid-send) is
+  the HTTP call, so no other worker/thread can double-send it. A row stuck
+  in ``SENDING`` (crash mid-send) is
   reclaimed to ``PENDING`` after ``EXPORT_STALE_SECONDS``.
 - **Idempotent on the client side**: punches carry ``biometricIDX`` and
   pre-regs are keyed by the client; a retry after an ambiguous failure

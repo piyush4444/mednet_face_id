@@ -66,7 +66,6 @@ your shell or a `.env` file at the project root.
 | `CLIENT_PREREG_API_KEY`   | `""`                                          | Credential for the pre-registration endpoint.                                                           |
 | `MEDIA_DIR`               | `database/media`                              | Local root for profile photos (gitignored — biometric PII). Served at `/media/*` by the API. |
 | `MEDIA_BASE_URL`          | `""`                                          | When a dedicated media server exists, its public base URL. Empty → photo URLs resolve to the API's own `/media/*` mount. DB stores relative paths, so flipping this needs no data migration. |
-| `KIOSK_DUPLICATE_WINDOW`  | `120`                                         | Seconds within which a repeat punch of the same person + direction at the kiosk is ignored (person lingering in front of the camera punches once). |
 | `CLIENT_API_TIMEOUT`      | `10.0`                                        | Outbound HTTP timeout. Non-secret integration identifiers live on the singleton facility row. |
 | `CLIENT_API_AUTH_HEADER`  | `Authorization`                               | Header the API key is attached to. |
 | `CLIENT_API_AUTH_SCHEME`  | `Bearer`                                      | Scheme prefix before the key (`Authorization: Bearer <key>`). Set empty for an `X-API-Key: <key>` style (with `AUTH_HEADER=X-API-Key`). Empty key → no auth header sent. |

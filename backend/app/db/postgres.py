@@ -113,7 +113,6 @@ def init_db() -> None:
     # registered ORM doesn't try to recreate a table whose physical
     # name has just changed.
     inspector = inspect(engine)
-    legacy_identity_reset = False
 
     # The pre-release RBAC schema used separate user_profile/user_auth rows
     # and facility-scoped mappings. A reset database may still contain those
@@ -154,7 +153,6 @@ def init_db() -> None:
                             ))
                 for table in legacy_tables:
                     conn.execute(text(f'DROP TABLE "{table}"'))
-            legacy_identity_reset = True
             inspector = inspect(engine)
         else:
             raise RuntimeError(
@@ -183,21 +181,6 @@ def init_db() -> None:
 
     # ── Post-create_all column/index patches ─────────────────────
     inspector = inspect(engine)  # refresh after create_all
-
-    if legacy_identity_reset and inspector.has_table("kiosk_devices"):
-        account_foreign_key = any(
-            "account_id" in foreign_key.get("constrained_columns", [])
-            for foreign_key in inspector.get_foreign_keys("kiosk_devices")
-        )
-        if not account_foreign_key:
-            with engine.begin() as conn:
-                conn.execute(text(
-                    "ALTER TABLE kiosk_devices "
-                    "ADD CONSTRAINT kiosk_devices_account_id_fkey "
-                    "FOREIGN KEY (account_id) REFERENCES service_accounts(id) "
-                    "ON DELETE SET NULL"
-                ))
-            inspector = inspect(engine)
 
     # User-model expansion, Phase 1: patch columns on ``users``.
     # ``create_all`` does not alter existing tables, so every new

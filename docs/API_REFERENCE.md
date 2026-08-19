@@ -36,9 +36,8 @@ Verified against codebase as of `2026-05-24`.
 19. [Integration recipes](#19-integration-recipes)
 20. [Notes for production deployments](#20-notes-for-production-deployments)
 21. [Facility configuration](#21-facility-configuration)
-22. [Kiosk](#22-kiosk)
-23. [Integrations (outbound delivery)](#23-integrations)
-24. [Locations admin](#24-locations-admin)
+22. [Integrations (outbound delivery)](#22-integrations)
+23. [Locations admin](#23-locations-admin)
 
 ---
 
@@ -67,8 +66,8 @@ Multipart uploads (`POST /register/multi`, `POST /recognize`, `POST /frontdesk/s
 ## 2. Authentication & CORS
 
 Authentication uses the canonical `users` identity. Employees and doctors may
-receive an optional credential, role, and permission overrides; kiosks use
-separate non-human service accounts.
+receive an optional credential, role, and permission overrides. Non-human
+service accounts are reserved for external integrations.
 
 ### Session model
 
@@ -111,7 +110,7 @@ Guarded by `audit.read`. Append-only trail of security-relevant actions (logins 
 
 Every router carries a permission guard (`backend/app/api/router.py` is the single map). `facility`/`locations` use `locations.manage`; all guards are inert until `AUTH_ENABLED=true`.
 
-`locations.manage` and `integrations.manage` are admin-tier defaults; `kiosk.operate` is a staff default. Kiosks authenticate with a dedicated non-human service account provisioned using `python -m backend.scripts.create_account --kiosk --username kiosk-gate-1`.
+`locations.manage` and `integrations.manage` are admin-tier defaults.
 
 ### Roles & permissions
 
@@ -678,7 +677,7 @@ Probe an RTSP URL without persisting it. Always returns `200` with a structured 
 
 ## 14. Front Desk
 
-The Front Desk surface is purpose-built for kiosk / queue UIs: scan a frame, get the closest-to-camera primary plus everyone else who is identifiable in the same frame as `candidates[]` so the operator can swap who they're serving with one click.
+The Front Desk surface is purpose-built for staffed queue workflows: scan a frame, get the closest-to-camera primary plus everyone else who is identifiable in the same frame as `candidates[]` so the operator can swap who they're serving with one click.
 
 ### `POST /api/v1/frontdesk/scan`
 
@@ -955,11 +954,11 @@ requests.post(f"{BASE}/users/42/relations", json={
 })
 ```
 
-### Front-desk kiosk loop
+### Front-desk scan loop
 
 ```python
 while True:
-    img = grab_frame_from_kiosk_camera()
+    img = grab_frame_from_frontdesk_camera()
     r = requests.post(f"{BASE}/frontdesk/scan", files={"image": img}).json()
 
     if not r["candidates"]:
@@ -1005,7 +1004,7 @@ for u in users:
 * **`SIMILARITY_THRESHOLD`** (default `0.60` in [`backend/config.py`](../backend/config.py)) is the FAISS cosine-similarity cutoff. Raise it for stricter matching (more `"Unknown"`), lower for laxer matching (more false positives). Tune on a labelled set. Note: a separate `SIMILARITY_THRESHOLD=0.45` exists in [`backend/app/core/config.py`](../backend/app/core/config.py) (Pydantic Settings) but is currently unused by the recognition path — the FAISS code reads the module-level constant directly.
 * **`START_CAMERA_SYSTEM=1`** must be set in the backend's env to spawn the camera workers. Without it, the `/cameras/*`, `/stream/*`, `/tracking/*`, and `/metrics` endpoints will return empty data or `503`.
 * **FAISS persistence** is debounced. On graceful shutdown the lifespan flushes any pending save; on `SIGKILL` you can lose registrations from the debounce window. Prefer `uvicorn`'s default `SIGTERM` path.
-* **Rate-limit `/recognize` and `/frontdesk/scan`** at the proxy — each call drives a full detect+embed pipeline and a kiosk loop without backoff can saturate CPU.
+* **Rate-limit `/recognize` and `/frontdesk/scan`** at the proxy — each call drives a full detect+embed pipeline and a scan loop without backoff can saturate CPU.
 * **MJPEG bandwidth**: at `TARGET_FPS=8`, `JPEG_QUALITY=70`, a 720p stream is ~500 kbps per viewer. Plan accordingly when streaming to remote operators.
 
 For wider architecture context (multi-process layout, camera pipeline, FAISS lifecycle) see `docs/ARCHITECTURE.md`. For per-commit change history see `docs/CHANGELOG.md`. For hardware sizing and camera placement see `docs/HARDWARE_AND_CAMERAS.md`.
@@ -1037,110 +1036,11 @@ There is no facility CRUD or switcher in the application.
 
 ---
 
-## 22. Kiosk
-
-Backend for the entry-gate kiosk (separate frontend bundle — `kiosk.html`).
-The kiosk loops: capture a frame → `POST /kiosk/scan` → show
-welcome/goodbye → back to scanning. Punches are logged for every user
-type; only EMPLOYEE/DOCTOR punches are queued for the client attendance
-push. Unknown faces are told to visit the front desk (the kiosk never
-self-registers). Rate-limit these endpoints at the proxy like
-`/frontdesk/scan` — each scan drives a full detect+embed pipeline.
-
-### `POST /kiosk/scan`
-
-Multipart: `image` (JPEG/PNG frame, ≤5 MB, magic-byte checked) +
-form fields `facility_id` (int), `mode` (`IN`|`OUT`), optional
-`kiosk_serial`, `camera_label`.
-
-The largest face in the frame is the subject. A repeat punch of the same
-person + direction within `KIOSK_DUPLICATE_WINDOW` (default 120 s)
-returns the existing punch with `duplicate: true` and writes nothing.
-
-```json
-{
-  "matched": true,
-  "faces_detected": 1,
-  "user": {
-    "id": 42, "name": "Asha Devi", "prefix": "Mrs.",
-    "person_type": "PATIENT", "mrn": "A1B2C3D4",
-    "photo_url": "/media/profile_photos/….jpg",
-    "…demographics for pre-fill…": "…"
-  },
-  "punch": {
-    "visit_type": "IN",
-    "event_time": "2026-07-14T09:12:33+05:30",
-    "visit_number": 4,
-    "duplicate": false
-  },
-  "facility_name": "Main Facility"
-}
-```
-
-`matched: false` + `faces_detected: 0` → empty frame (kiosk keeps
-scanning silently); `faces_detected > 0` → unknown face (kiosk shows the
-front-desk message). On an IN punch the mapping's `visit_count`
-increments and `visit_number` snapshots it. EMPLOYEE/DOCTOR punches also
-insert a `punch_export_queue` row (client payload, `biometricIDX`
-dedup key).
-
-### `POST /kiosk/prereg`
-
-JSON: `user_id`, `facility_id`, `token_type` (`General`|`Cash`), plus any
-of the demographic fields (`prefix`, `first_name`, …, `mrn`). Corrected
-demographics are written back to the registry row; the facility-issued MRN
-lands on the mapping. Stores a `pre_registration_log` row with the
-client-shaped payload, `status=PENDING` (the HIS push is the export
-phase). Response:
-
-```json
-{
-  "success": true,
-  "pre_registration": {
-    "id": 7, "status": "PENDING", "pre_regn_id": null,
-    "token_no": null, "queue_setup_id": 36, "created_at": "…"
-  }
-}
-```
-
-`token_no` / `pre_regn_id` populate once the push succeeds and the client
-HIS responds.
-
-### `GET /kiosk/mrn/new`
-
-Random unique MRN (checked against `users.mrn` and the facility's
-mapping MRNs) — backs the form's "Generate" button. → `{"mrn": "X7K2…"}`
-
-### `GET /kiosk/setup-options`
-
-Singleton facility data plus the camera list for the kiosk setup screen, so
-the kiosk device account needs no admin-tier reads. Only the picker fields
-(no client GUIDs, no camera source URLs).
-
-```json
-{
-  "facility": { "id": 1, "name": "Mednet" },
-  "cameras": [{ "camera_id": "cam_ce2cc3ad", "name": "test_cam3", "role": "entry", "active": true }]
-}
-```
-
-### Camera source
-
-The kiosk can capture from **this device's webcam** (browser `getUserMedia`)
-or a **registered IP/system camera** from the main camera roster. For a
-system camera it displays the MJPEG feed (`/stream/{id}`) and scans by
-posting `/stream/{id}/snapshot` to `/kiosk/scan` — the same frame source the
-Front Desk uses, so browsers never touch RTSP. Both require `streams.view`
-(held by the kiosk device account).
-
----
-
-## 23. Integrations
+## 22. Integrations
 
 Outbound delivery to the B2B partner's HIS. **Staff punches** land in
-`punch_export_queue`; **patient pre-registrations** are pushed inline by
-the kiosk (so the token shows at once) and fall back to the queue on
-failure. A single background worker drains both with claim-based
+`punch_export_queue`; **patient pre-registrations** land in the durable
+delivery queue. A single background worker drains both with claim-based
 concurrency safety, exponential backoff, and dead-lettering after
 `EXPORT_MAX_ATTEMPTS`. The worker is **dormant until a
 `CLIENT_*_API_URL` is configured** (see CONFIGURATION.md §2) — no
@@ -1171,7 +1071,7 @@ if it doesn't exist. Never sends inline — only reschedules.
 
 ---
 
-## 24. Locations admin
+## 23. Locations admin
 
 CRUD for locations (`location_master`) — the named, hierarchical places
 inside a facility (floor / corridor / room / gate / ward). Cameras and

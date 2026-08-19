@@ -8,17 +8,23 @@ rationale.
 
 ## 2026-08-19
 
+### `<unreleased>` — refactor(kiosk): shelve the kiosk module
+
+- Preserved the complete implementation on `feature/kiosk-module` at commit `a40881e` for future development.
+- Removed kiosk REST/admin routes, services, device provisioning, permissions, configuration, physical-device Vite entry, admin page, and navigation from `main`.
+- Retained generic service-account and outbound-integration infrastructure because those are not kiosk-specific.
+
 ### `<unreleased>` — refactor(identity): canonical users, global RBAC, single facility
 
 - Human authentication now attaches optional credentials, one role, and permission overrides directly to the canonical `users` identity; recognized employees/doctors no longer receive an unrelated login record.
-- Kiosks use separate `service_accounts`, keeping machine principals out of the human registry.
+- Non-human integrations use separate `service_accounts`, keeping machine principals out of the human registry.
 - Accounts & RBAC grants access to an existing employee/doctor. Role and permission enforcement now resolves from the same database catalog for HTTP, WebSocket, `/auth/me`, and management policy checks.
 - Removed facility CRUD/switching and the dormant Facility Roles frontend. `facility_master` is a singleton internal anchor created with Mednet and the first superadmin by `python -m backend.scripts.seed_initial`.
 
 ### `<unreleased>` — refactor(core): enforce the singleton Mednet facility
 
-- Removed the Facilities page, topbar facility selector, and facility choices from locations, cameras, kiosks, and setup flows. Internal foreign keys remain for relational and client-HIS compatibility.
-- Replaced `/facilities` CRUD with read-only `GET /facility`; camera/location/kiosk services resolve the singleton automatically.
+- Removed the Facilities page, topbar facility selector, and facility choices from active administration flows. Internal foreign keys remain for relational and client-HIS compatibility.
+- Replaced `/facilities` CRUD with read-only `GET /facility`; camera and location services resolve the singleton automatically.
 - Added the idempotent `backend.scripts.seed_initial` bootstrap using environment-configured facility and superadmin values.
 
 ### `<unreleased>` — chore(admin): shelve the Facility Roles management surface

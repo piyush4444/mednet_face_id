@@ -3,7 +3,7 @@ create_account.py — seed a login account (no default credentials, ever).
 
 Usage (from the repo root)::
 
-    python -m backend.scripts.create_account --username admin --role super_admin
+    python -m backend.scripts.create_account --user-id 7 --username admin --role super_admin
 
 The password is read interactively (getpass) and never accepted on the
 command line, so it can't leak into shell history or the process table.
@@ -23,22 +23,9 @@ from pathlib import Path
 # Make ``backend.*`` importable when run as a module or a script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from backend.app.db.auth_models import Permission, Role  # noqa: E402
+from backend.app.db.auth_models import Role  # noqa: E402
 from backend.app.db.postgres import SessionLocal, init_db  # noqa: E402
 from backend.app.services import auth_service  # noqa: E402
-
-
-# A kiosk device account is a STAFF login stripped down to exactly the two
-# permissions the unattended entry-gate kiosk needs: run the kiosk flow and
-# view the camera stream/snapshot. Every other staff default is revoked so a
-# compromised kiosk device can't read patient PII or operate the front desk.
-_KIOSK_GRANTED = [Permission.STREAMS_VIEW.value]
-_KIOSK_REVOKED = [
-    Permission.FRONTDESK_OPERATE.value,
-    Permission.USERS_READ.value,
-    Permission.TRACKING_READ.value,
-    Permission.HISTORY_READ.value,
-]
 
 
 def _prompt_password() -> str:
@@ -68,14 +55,6 @@ def main() -> int:
         default=Role.SUPER_ADMIN.value,
         help="Account role (default: super_admin).",
     )
-    parser.add_argument(
-        "--kiosk",
-        action="store_true",
-        help=(
-            "Provision a minimal kiosk device account (role staff, effective "
-            "permissions = kiosk.operate + streams.view only). Ignores --role."
-        ),
-    )
     args = parser.parse_args()
 
     username = args.username or input("Username: ").strip()
@@ -83,8 +62,8 @@ def main() -> int:
         print("Username must not be empty.", file=sys.stderr)
         return 2
 
-    role = Role.STAFF if args.kiosk else Role(args.role)
-    if not args.kiosk and args.user_id is None:
+    role = Role(args.role)
+    if args.user_id is None:
         print("--user-id is required for a human login.", file=sys.stderr)
         return 2
     password = _prompt_password()
@@ -94,28 +73,20 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        if args.kiosk:
-            acct = auth_service.create_kiosk_account(
-                db, username=username, password=password
-            )
-        else:
-            acct = auth_service.create_account(
-                db,
-                user_id=args.user_id,
-                username=username,
-                password=password,
-                role=role,
-            )
+        acct = auth_service.create_account(
+            db,
+            user_id=args.user_id,
+            username=username,
+            password=password,
+            role=role,
+        )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     finally:
         db.close()
 
-    kind = "kiosk device account" if args.kiosk else "account"
-    print(f"Created {kind} #{acct.id}: {acct.username} ({acct.role})")
-    if args.kiosk:
-        print("  Effective permissions: kiosk.operate, streams.view")
+    print(f"Created account #{acct.id}: {acct.username} ({acct.role})")
     return 0
 
 

@@ -3,7 +3,7 @@ facility_models.py — singleton-facility operations and integration models.
 
 Phase 1 of the B2B-partner restructure (see ``docs/CHANGELOG.md``):
 The facility foreign keys remain internal relational anchors for locations,
-cameras, visits, kiosks, and client-HIS payloads. The application supports
+cameras, visits, and client-HIS payloads. The application supports
 exactly one active facility and never exposes tenant switching.
 
 Tables
@@ -19,7 +19,7 @@ Tables
                           singleton facility. Carries the client-facing person
                           type, MRN, and running ``visit_count``.
 - person_tracking_logs  : append-only event log — every punch (IN/OUT from
-                          gate/kiosk cameras) and every zone sighting
+                          gate cameras) and every zone sighting
                           (TRACKER_IN/TRACKER_OUT from internal cameras).
                           Presence state stays derived, never authoritative.
 - punch_export_queue    : outbound punch deliveries to the client attendance
@@ -27,8 +27,8 @@ Tables
                           the client's unique transaction id, so retries are
                           idempotent on their side.
 - pre_registration_log  : one row per pre-registration pushed to the client
-                          HIS; stores their ``preRegnId`` / ``tokenNo`` so the
-                          kiosk can re-show a token and ops can audit pushes.
+                          HIS; stores their ``preRegnId`` / ``tokenNo`` for
+                          operational display and audit.
 
 Design notes
 ------------
@@ -71,7 +71,7 @@ class VisitorSubtype(str, enum.Enum):
 class VisitType(str, enum.Enum):
     """Allowed values for :attr:`PersonTrackingLog.visit_type`.
 
-    IN / OUT are official punches from gate or kiosk cameras and drive
+    IN / OUT are official punches from gate cameras and drive
     attendance. TRACKER_IN / TRACKER_OUT are zone-boundary sightings
     from internal cameras — movement history only, never exported.
     """
@@ -118,7 +118,6 @@ class CameraType(str, enum.Enum):
 class TrackingSource(str, enum.Enum):
     """Allowed values for :attr:`PersonTrackingLog.source`."""
 
-    KIOSK = "KIOSK"
     CAMERA = "CAMERA"
     MANUAL = "MANUAL"
 
@@ -126,8 +125,8 @@ class TrackingSource(str, enum.Enum):
 class ExportStatus(str, enum.Enum):
     """Delivery lifecycle shared by the outbound integration tables.
 
-    ``SENDING`` is a transient claim marker: the worker (or the inline
-    kiosk push) flips a row to SENDING before the HTTP call so no other
+    ``SENDING`` is a transient claim marker: the worker flips a row to
+    SENDING before the HTTP call so no other
     worker/thread can pick the same row, then to SENT or FAILED. A row
     stuck in SENDING (process crashed mid-send) is reclaimed to PENDING
     after ``EXPORT_STALE_SECONDS``.
@@ -441,8 +440,8 @@ class PersonVisitLog(Base):
     # Purpose of visit, captured at entry for non-staff — this is what
     # replaced the retired ``user_relations`` table.
     purpose = Column(String(256), nullable=True)
-    # Stable ``camera_master.code`` value. Kept nullable for kiosk webcam and
-    # manual entries; a formal FK can be added after legacy history cleanup.
+    # Stable ``camera_master.code`` value. Kept nullable for manual entries;
+    # a formal FK can be added after legacy history cleanup.
     camera_id = Column(String(50), nullable=True)
     location_id = Column(
         Integer,
@@ -452,7 +451,7 @@ class PersonVisitLog(Base):
 
     event_time = Column(DateTime(timezone=True), default=now_ist, nullable=False)
     visit_number = Column(Integer, nullable=True)
-    source = Column(String(10), default=TrackingSource.KIOSK.value, nullable=False)
+    source = Column(String(10), default=TrackingSource.CAMERA.value, nullable=False)
 
     created_at = Column(DateTime(timezone=True), default=now_ist)
 
@@ -517,47 +516,6 @@ class PunchExportSync(Base):
     __table_args__ = (
         Index("idx_pes_status_retry", "status", "next_retry_at"),
     )
-
-
-class KioskDevice(Base):
-    """A registered entry-gate kiosk (central config).
-
-    Each physical kiosk is provisioned here so its runtime config lives on
-    the server, not only in the device's browser. The device authenticates
-    (its ``account``) and pulls this config by ``serial`` on boot — no
-    on-device camera/facility/mode setup. ``serial`` also flows into the
-    outbound punch payload (the biometric device id).
-    """
-
-    __tablename__ = "kiosk_devices"
-
-    id = Column(Integer, primary_key=True, index=True)
-    serial = Column(String(64), unique=True, nullable=False, index=True)
-    name = Column(String(120), nullable=False)
-
-    facility_id = Column(
-        Integer, ForeignKey("facility_master.id", ondelete="SET NULL"), nullable=True
-    )
-    # Direction handling: IN, OUT, or AUTO (resolve per person).
-    mode = Column(String(8), nullable=False, default="AUTO")
-    # Frame source: "webcam" (device cam) or "system" (roster camera_id).
-    source_type = Column(String(10), nullable=False, default="webcam")
-    camera_id = Column(String(50), nullable=True)  # roster id when source=system
-    # Optional per-kiosk override of settings.KIOSK_DUPLICATE_WINDOW.
-    dup_window = Column(Integer, nullable=True)
-
-    # The kiosk device login this kiosk authenticates as (kiosk.operate).
-    account_id = Column(
-        Integer, ForeignKey("service_accounts.id", ondelete="SET NULL"), nullable=True
-    )
-
-    is_active = Column(Boolean, default=True, nullable=False)
-    last_seen_at = Column(DateTime(timezone=True), nullable=True)
-
-    created_at = Column(DateTime(timezone=True), default=now_ist)
-    updated_at = Column(DateTime(timezone=True), onupdate=now_ist)
-
-    facility = relationship("Facility")
 
 
 class PreRegistration(Base):

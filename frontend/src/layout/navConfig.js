@@ -40,7 +40,6 @@ export const NAV_GROUPS = [
   {
     label: "System",
     items: [
-      { key: "kiosk", label: "Kiosk", path: "/kiosk-admin", icon: "kiosk", perm: "kiosk.manage" },
       { key: "accounts", label: "Accounts & RBAC", path: "/accounts", icon: "accounts", perm: "accounts.manage_staff" },
     ],
   },

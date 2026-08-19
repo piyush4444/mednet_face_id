@@ -3,7 +3,7 @@ auth_models.py — Login principals and the RBAC permission vocabulary.
 
 Human identity lives only in ``app.db.models.User``. ``UserCredential`` is an
 optional one-to-one secret record for users who may sign in; ``ServiceAccount``
-represents non-human kiosk and integration principals.
+represents non-human integration principals.
 
 Permission model (see the ``auth-rbac`` skill for the full spec):
 
@@ -60,8 +60,6 @@ class Permission(str, enum.Enum):
     BACKUP_MANAGE = "backup.manage"               # export / import (see backup skill)
     # ── B2B restructure surfaces ──
     LOCATIONS_MANAGE = "locations.manage"         # singleton facility locations
-    KIOSK_OPERATE = "kiosk.operate"               # /kiosk/* (front desk + kiosk device)
-    KIOSK_MANAGE = "kiosk.manage"                 # /kiosk-admin/* — kiosk devices + logs
     INTEGRATIONS_MANAGE = "integrations.manage"   # /integrations/* status/flush/retry
 
 
@@ -76,9 +74,6 @@ _STAFF_DEFAULTS = {
     P.USERS_READ,
     P.TRACKING_READ,
     P.HISTORY_READ,
-    # Front-desk staff run the entry-gate kiosk (and the unattended kiosk
-    # device principal is granted this same permission).
-    P.KIOSK_OPERATE,
 }
 
 _ADMIN_DEFAULTS = _STAFF_DEFAULTS | {
@@ -92,8 +87,6 @@ _ADMIN_DEFAULTS = _STAFF_DEFAULTS | {
     # Deployment config + outbound integration health are admin-tier.
     P.LOCATIONS_MANAGE,
     P.INTEGRATIONS_MANAGE,
-    # Kiosk devices + kiosk activity/pre-reg/attendance logs (PII).
-    P.KIOSK_MANAGE,
 }
 
 _SUPER_ADMIN_DEFAULTS = set(Permission)  # everything
@@ -139,14 +132,14 @@ class UserCredential(Base):
 
 
 class ServiceAccount(Base):
-    """Non-human principal used by a kiosk or external integration."""
+    """Non-human principal reserved for external integrations."""
 
     __tablename__ = "service_accounts"
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(64), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    principal_type = Column(String(20), nullable=False, default="KIOSK")
+    principal_type = Column(String(20), nullable=False, default="INTEGRATION")
     role = Column(String(20), nullable=False, default=Role.STAFF.value)
     granted_permissions = Column(JSONB, nullable=False, default=list)
     revoked_permissions = Column(JSONB, nullable=False, default=list)

@@ -189,7 +189,7 @@ A well-placed 1080p camera will out-perform a poorly-placed 4K one.
 
 ### 3.4 Deployment patterns
 
-#### OPD front-desk / scan kiosk
+#### OPD front-desk scanner
 - One camera, ~0.5–1.5 m from patient. USB or 1080p IP cam is fine.
 - Mount face-level, lit from front (overhead diffused or ring light).
 - This is the camera the **Front Desk** scan page uses.

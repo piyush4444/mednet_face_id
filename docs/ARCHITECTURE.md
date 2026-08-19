@@ -339,9 +339,9 @@ need a stable relational/configuration anchor; it is not a tenant selector.
 | `facility_master` | Singleton Mednet deployment record and client-HIS identifiers. Created only by `backend.scripts.seed_initial`; read-only at `/api/v1/facility`. |
 | `location_master` | Named places inside a facility (floor / corridor / room / gate), hierarchical via `parent_location_id` (FHIR-Location style). CRUD at `/api/v1/locations`; cameras reference facilities and optional locations through `camera_master`. |
 | `person_facility` | Operational membership in the singleton facility: client-facing `person_type`, MRN, visit counter, and last-visit time. There is one effective membership per user in this deployment. |
-| `person_tracking_logs` | Append-only punch / sighting events: `visit_type` IN/OUT (official punches from gate/kiosk cameras) or TRACKER_IN/TRACKER_OUT (internal zone sightings, never exported), `visit_number` snapshot, `source` KIOSK/CAMERA/MANUAL. Presence state stays derived. |
+| `person_tracking_logs` | Append-only punch / sighting events: `visit_type` IN/OUT (official gate-camera punches) or TRACKER_IN/TRACKER_OUT (internal zone sightings, never exported), `visit_number` snapshot, `source` CAMERA/MANUAL. Presence state stays derived. |
 | `punch_export_queue` | Outbound punch deliveries to the client attendance API (EMPLOYEE/DOCTOR mappings only, one punch per request). `biometric_idx` mirrors the client's unique transaction id so retries are idempotent. Pusher lands in a later phase. |
-| `pre_registration_log` | One row per pre-registration pushed to the client HIS; stores their `preRegnId` / `tokenNo` (shown on the kiosk) plus raw request/response JSONB for audit. Forwarder lands in a later phase. |
+| `pre_registration_log` | One row per pre-registration pushed to the client HIS; stores `preRegnId` / `tokenNo` plus raw request/response JSONB for audit. |
 
 Identity stays in `users` — that table **is** the person registry. Person ids
 stay integers because the client punch contract requires a numeric
@@ -359,31 +359,14 @@ Client-HIS endpoint URLs + credentials are env vars
 (`CLIENT_PUNCH_API_URL`, `CLIENT_PREREG_API_URL`, … — see CONFIGURATION.md §2);
 facility integration identifiers live on the singleton facility row.
 
-**Kiosk** (Phase 2): a second Vite entry point ([kiosk.html](../frontend/kiosk.html)
-→ [src/kiosk/](../frontend/src/kiosk/)) gives the entry-gate screen its own
-URL and bundle (no router/MUI/WS — ~5 kB gzipped). Device binding (camera,
-IN/OUT mode, facility, kiosk serial) is chosen once and persisted in
-localStorage. The loop: capture a webcam frame every ~1.5 s → `POST
-/kiosk/scan` ([routes/kiosk.py](../backend/app/api/routes/kiosk.py) →
-[kiosk_service.py](../backend/app/services/kiosk_service.py)) → largest face
-recognized → punch recorded (duplicate window `KIOSK_DUPLICATE_WINDOW`,
-default 120 s) → greeting (staff: welcome/goodbye + punch time; patients on
-IN additionally get "Pre-register for my visit" / "I am visiting someone
-else") → back to scanning. Unknown faces see "please visit the front desk"
-(the kiosk never self-registers). EMPLOYEE/DOCTOR punches enqueue a
-`punch_export_queue` row; patient pre-registrations store a
-client-shaped payload in `pre_registration_log` as PENDING — the actual
-HTTP pushes to the client HIS are the export phase.
-
 **Outbound integration** (Phase 3): a single daemon thread
 ([export_worker.py](../backend/app/services/export_worker.py), started from
 the FastAPI lifespan) drains two queues to the partner HIS via a
 dependency-free stdlib HTTP layer
 ([client_api.py](../backend/app/services/client_api.py)). Staff punches
 (`punch_export_queue`) are delivered by the worker; patient
-pre-registrations are pushed **inline** by `POST /kiosk/prereg` (so the
-kiosk shows the returned `tokenNo` immediately) with the worker as retry
-safety net. Reliability: a row is claimed (`status→SENDING`, atomic
+pre-registrations are delivered from the durable queue. Reliability: a row
+is claimed (`status→SENDING`, atomic
 rowcount-checked UPDATE) before its HTTP call so nothing double-sends;
 failures back off exponentially (`EXPORT_BACKOFF_BASE`→`_CAP`) and
 dead-letter after `EXPORT_MAX_ATTEMPTS`; a row stuck in `SENDING` (crash

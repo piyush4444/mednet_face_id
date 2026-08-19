@@ -116,11 +116,6 @@ class Settings(BaseSettings):
     EXPORT_BATCH_SIZE: int = 20            # rows processed per sweep per queue
     EXPORT_STALE_SECONDS: float = 120.0    # reclaim a stuck SENDING row after
 
-    # ── Kiosk ────────────────────────────────────────────────────────────
-    # Ignore a repeat punch of the same person + direction within this
-    # window (seconds) — a person lingering at the kiosk punches once.
-    KIOSK_DUPLICATE_WINDOW: int = 120
-
     # ── Recognition ──────────────────────────────────────────────────────
     SIMILARITY_THRESHOLD: float = 0.45
     EMBEDDING_DIM: int = 512

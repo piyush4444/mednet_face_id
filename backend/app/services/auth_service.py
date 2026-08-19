@@ -214,35 +214,6 @@ def create_account(
     return principal_for_user(db, user)
 
 
-KIOSK_GRANTED = [Permission.STREAMS_VIEW.value]
-KIOSK_REVOKED = [
-    Permission.FRONTDESK_OPERATE.value,
-    Permission.USERS_READ.value,
-    Permission.TRACKING_READ.value,
-    Permission.HISTORY_READ.value,
-]
-
-
-def create_kiosk_account(db: Session, *, username: str, password: str) -> AuthPrincipal:
-    username = username.strip()
-    if not username or len(password) < 8:
-        raise ValueError("username is required and password must be at least 8 characters")
-    if _username_exists(db, username):
-        raise ValueError(f"username {username!r} already exists")
-    row = ServiceAccount(
-        username=username,
-        password_hash=hash_password(password),
-        principal_type="KIOSK",
-        role=Role.STAFF.value,
-        granted_permissions=KIOSK_GRANTED,
-        revoked_permissions=KIOSK_REVOKED,
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return principal_for_service(row)
-
-
 def _parse_permissions(values) -> set[Permission]:
     out = set()
     for value in values or []:
