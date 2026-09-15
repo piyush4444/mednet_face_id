@@ -1,0 +1,111 @@
+name: Deploy office test server
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git branch, tag, or commit to deploy
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: office-test-deployment
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out requested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compile Python sources
+        run: python -m compileall -q backend
+
+      - name: Validate Compose configuration
+        env:
+          POSTGRES_DB: iris
+          POSTGRES_USER: iris
+          POSTGRES_PASSWORD: validation-only
+          ALLOWED_ORIGINS: https://mednet-test.tail89ab07.ts.net
+          SESSION_SECRET: validation-only-session-secret
+          BOOTSTRAP_SUPERADMIN_PASSWORD: validation-only-password
+        run: docker compose -f deploy/compose.yaml config --quiet
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: office-testing
+    steps:
+      - name: Check out requested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+
+      - name: Record immutable release SHA
+        id: release
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Connect runner to the tailnet
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: ${{ vars.OFFICE_SSH_HOST }}
+
+      - name: Configure deployment SSH identity
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.OFFICE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.OFFICE_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Package release
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=frontend/node_modules \
+            --exclude=frontend/dist \
+            --exclude=database \
+            --exclude=MEDNET_API \
+            -czf "release-${{ steps.release.outputs.sha }}.tgz" .
+
+      - name: Upload and deploy release
+        env:
+          DEPLOY_HOST: ${{ vars.OFFICE_SSH_HOST }}
+          DEPLOY_USER: ${{ vars.OFFICE_SSH_USER }}
+          DEPLOY_ROOT: ${{ vars.OFFICE_DEPLOY_ROOT }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$DEPLOY_ROOT/releases/$RELEASE_SHA'"
+          scp "release-$RELEASE_SHA.tgz" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/releases/$RELEASE_SHA/release.tgz"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "tar -xzf '$DEPLOY_ROOT/releases/$RELEASE_SHA/release.tgz' -C '$DEPLOY_ROOT/releases/$RELEASE_SHA' && rm '$DEPLOY_ROOT/releases/$RELEASE_SHA/release.tgz' && chmod 700 '$DEPLOY_ROOT/releases/$RELEASE_SHA/deploy/server-deploy.sh' && '$DEPLOY_ROOT/releases/$RELEASE_SHA/deploy/server-deploy.sh' '$RELEASE_SHA' '$DEPLOY_ROOT'"

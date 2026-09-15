@@ -5,10 +5,14 @@ All tunable parameters live here. Import this module from any stage
 to access consistent settings across the entire system.
 """
 
+import os as _os
+
 # ──────────────────────── Hardware Scaling ────────────────────────
 
-CPU_CORES = 6  # auto-detect later if needed
-GPU_ENABLED = True
+CPU_CORES = max(1, int(_os.getenv("CPU_CORES", "6")))
+GPU_ENABLED = _os.getenv("GPU_ENABLED", "true").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # Dynamic face scaling
 MAX_FACES_BASE = 6          # safe baseline (low system)
@@ -101,7 +105,9 @@ NORMALIZE_PIXELS = False            # If True: scale pixels to [-1, 1] float32
 
 # ────────────────────────── Embedding ───────────────────────────
 EMBEDDING_DIM = 512                 # ArcFace produces 512-d vectors
-GPU_DEVICE_ID = 0                   # 0 = first GPU (CUDA), -1 = CPU only
+GPU_DEVICE_ID = int(_os.getenv(
+    "GPU_DEVICE_ID", "0" if GPU_ENABLED else "-1"
+))                                  # 0 = first GPU (CUDA), -1 = CPU only
                                     # Used by InsightFace, ONNX Runtime, PyTorch
 GPU_SCALING_FACTOR = 2.0 if GPU_ENABLED else 1.0
 
@@ -134,7 +140,6 @@ SMOOTHING_WINDOW = 5                # Majority vote window size (frames)
 # silent drift: starting the server from project root vs. backend/app
 # writes to two different files, and old registrations vanish from the
 # active index.
-import os as _os
 _PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 DATABASE_DIR = _os.path.join(_PROJECT_ROOT, "database")
 FAISS_INDEX_PATH = _os.path.join(_PROJECT_ROOT, "database", "face_index.bin")

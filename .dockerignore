@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+!frontend/.env.production
+.venv
+**/__pycache__
+**/*.py[cod]
+frontend/node_modules
+frontend/dist
+database
+MEDNET_API
+AGENTS.md
+CLAUDE.md
+*.log
