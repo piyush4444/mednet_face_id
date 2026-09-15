@@ -24,6 +24,7 @@ const FrontDesk       = lazy(() => import("./pages/FrontDesk"));
 const Locations       = lazy(() => import("./pages/Locations"));
 const FrontDeskAdmin  = lazy(() => import("./pages/FrontDeskAdmin"));
 const AccountsAdmin   = lazy(() => import("./pages/AccountsAdmin"));
+const Attendance      = lazy(() => import("./pages/Attendance"));
 const Settings        = lazy(() => import("./pages/Settings"));
 
 // Cheap inline fallback — avoids pulling MUI Skeleton just for this.
@@ -84,6 +85,8 @@ function AuthedApp() {
             <Guard perm="cameras.manage"><Cameras /></Guard>} />
           <Route path="/frontdesk-admin" element={
             <Guard perm="frontdesk_admin.manage"><FrontDeskAdmin /></Guard>} />
+          <Route path="/attendance" element={
+            <Guard perm="attendance.read"><Attendance /></Guard>} />
 
           {/* System */}
           <Route path="/accounts" element={

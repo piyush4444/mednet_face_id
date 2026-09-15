@@ -61,6 +61,9 @@ class Permission(str, enum.Enum):
     # ── B2B restructure surfaces ──
     LOCATIONS_MANAGE = "locations.manage"         # singleton facility locations
     INTEGRATIONS_MANAGE = "integrations.manage"   # /integrations/* status/flush/retry
+    ATTENDANCE_READ = "attendance.read"           # attendance dashboard + audit
+    ATTENDANCE_MANAGE = "attendance.manage"       # timing/camera policy
+    ATTENDANCE_RETRY = "attendance.retry"         # reschedule failed punches
 
 
 # ── Role default permission bundles ──────────────────────────────────────
@@ -87,6 +90,9 @@ _ADMIN_DEFAULTS = _STAFF_DEFAULTS | {
     # Deployment config + outbound integration health are admin-tier.
     P.LOCATIONS_MANAGE,
     P.INTEGRATIONS_MANAGE,
+    P.ATTENDANCE_READ,
+    P.ATTENDANCE_MANAGE,
+    P.ATTENDANCE_RETRY,
 }
 
 _SUPER_ADMIN_DEFAULTS = set(Permission)  # everything

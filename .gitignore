@@ -70,3 +70,8 @@ database/cameras.json
 *.pem
 *.key
 notes.txt
+
+
+# dev
+AGENTS.md
+CLAUDE.md

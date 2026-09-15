@@ -1,7 +1,8 @@
 /**
  * AccountsAdmin — Settings ▸ Accounts.
  *
- * Manage login accounts: create them, enable/disable, and toggle the
+ * Manage login accounts for canonical registered users: create them,
+ * enable/disable, and toggle the
  * per-account grantable permissions. Visible only with accounts.manage_staff.
  * The backend enforces the full hierarchy (an admin can only touch staff and
  * only hand out permissions it holds), so a disallowed toggle simply returns
@@ -58,8 +59,14 @@ export default function AccountsAdmin() {
   }, []);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    Promise.all([listAccounts(), listAccessCandidates()])
+      .then(([accountRows, candidateRows]) => {
+        setAccounts(accountRows);
+        setCandidates(candidateRows);
+      })
+      .catch((err) => toast.error(err?.message || "Failed to load accounts"))
+      .finally(() => setLoading(false));
+  }, []);
 
   const onCreate = async (e) => {
     e.preventDefault();
@@ -108,7 +115,7 @@ export default function AccountsAdmin() {
     <div className="bg-card rounded-2xl shadow-md border border-primary/8 p-5">
       <h2 className="text-lg font-bold text-text-main mb-1">Accounts</h2>
       <p className="text-sm text-text-muted mb-5">
-        Enable login access for registered employees and doctors, then assign permissions.
+        Enable login access for eligible non-patient users, then assign permissions.
       </p>
 
       {/* Create */}
@@ -124,10 +131,10 @@ export default function AccountsAdmin() {
             required
             className="px-3 py-2 rounded-lg bg-background border border-primary/10 text-text-main outline-none focus:border-primary/40"
           >
-            <option value="">Select employee or doctor…</option>
+            <option value="">Select a registered user…</option>
             {candidates.map((user) => (
               <option key={user.id} value={user.id}>
-                {user.name} · {user.user_type.toLowerCase()}
+                {user.name} · {user.user_type.toLowerCase()} · ID {user.id}
               </option>
             ))}
           </select>

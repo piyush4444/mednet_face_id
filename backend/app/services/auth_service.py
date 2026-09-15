@@ -195,8 +195,8 @@ def create_account(
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise ValueError("active user not found")
-    if user.user_type not in {UserType.EMPLOYEE.value, UserType.DOCTOR.value}:
-        raise ValueError("system access may only be assigned to an employee or doctor")
+    if user.user_type == UserType.PATIENT.value:
+        raise ValueError("system access cannot be assigned to a patient")
     if db.query(UserCredential).filter(UserCredential.user_id == user_id).first():
         raise ValueError("this user already has system access")
     role_row = db.query(RoleMaster).filter(RoleMaster.code == role.value).first()

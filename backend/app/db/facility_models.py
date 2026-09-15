@@ -44,6 +44,7 @@ import enum
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -190,6 +191,7 @@ class Location(Base):
         nullable=False,
         index=True,
     )
+
     parent_location_id = Column(
         Integer,
         ForeignKey("location_master.id", ondelete="SET NULL"),
@@ -496,6 +498,16 @@ class PunchExportSync(Base):
         nullable=True,
         index=True,
     )
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    attendance_date = Column(Date, index=True)
+    direction = Column(String(3))  # IN | OUT
+    camera_id = Column(String(50))
+    depends_on_id = Column(
+        Integer,
+        ForeignKey("punch_export_sync.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    policy_version = Column(Integer)
 
     biometric_idx = Column(String(120), unique=True, nullable=False)
     # Client contract: "0" = IN, "1" = OUT (mirrors the value in ``payload``).
@@ -505,6 +517,9 @@ class PunchExportSync(Base):
     status = Column(String(10), default=ExportStatus.PENDING.value, nullable=False)
     attempts = Column(Integer, default=0, nullable=False)
     last_error = Column(Text, nullable=True)
+    response_status = Column(Integer, nullable=True)
+    response_payload = Column(JSONB, nullable=True)
+    last_latency_ms = Column(Integer, nullable=True)
     next_retry_at = Column(DateTime(timezone=True), nullable=True)
     sent_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -515,6 +530,12 @@ class PunchExportSync(Base):
 
     __table_args__ = (
         Index("idx_pes_status_retry", "status", "next_retry_at"),
+        UniqueConstraint(
+            "user_id",
+            "attendance_date",
+            "direction",
+            name="uq_punch_user_date_direction",
+        ),
     )
 
 

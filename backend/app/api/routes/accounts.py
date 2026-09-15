@@ -1,4 +1,4 @@
-"""Grant application access to canonical employee/doctor users."""
+"""Grant application access to canonical registered users."""
 
 from __future__ import annotations
 
@@ -142,10 +142,10 @@ def access_candidates(
         .outerjoin(UserCredential, UserCredential.user_id == User.id)
         .filter(
             User.is_active.is_(True),
-            User.user_type.in_([UserType.EMPLOYEE.value, UserType.DOCTOR.value]),
+            User.user_type != UserType.PATIENT.value,
             UserCredential.id.is_(None),
         )
-        .order_by(User.name)
+        .order_by(User.user_type, User.name)
         .all()
     )
     return [

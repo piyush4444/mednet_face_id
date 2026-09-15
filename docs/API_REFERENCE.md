@@ -1039,7 +1039,7 @@ There is no facility CRUD or switcher in the application.
 ## 22. Integrations
 
 Outbound delivery to the B2B partner's HIS. **Staff punches** land in
-`punch_export_queue`; **patient pre-registrations** land in the durable
+`punch_export_sync`; **patient pre-registrations** land in the durable
 delivery queue. A single background worker drains both with claim-based
 concurrency safety, exponential backoff, and dead-lettering after
 `EXPORT_MAX_ATTEMPTS`. The worker is **dormant until a
@@ -1065,8 +1065,8 @@ Wake the worker for an immediate sweep (no-op if dormant). `{"ok": true}`.
 ### `POST /api/v1/integrations/exports/{export_id}/retry`
 ### `POST /api/v1/integrations/preregs/{prereg_id}/retry`
 
-Reset a dead-lettered (`FAILED`) row to `PENDING`, clear its attempt
-count, and wake the worker. `409` if the row was already `SENT`, `404`
+Reset a dead-lettered (`FAILED`) row to `PENDING`, open another attempt,
+and wake the worker. `409` if the row was already `SENT`, `404`
 if it doesn't exist. Never sends inline — only reschedules.
 
 ---
@@ -1110,3 +1110,24 @@ Same validation as create.
 ### `DELETE /api/v1/locations/{location_id}`
 
 Soft-delete (`is_active=false`). Returns the updated object.
+
+---
+
+## 24. Attendance
+
+Requires `attendance.read`; configuration and retry mutations additionally
+require `attendance.manage` and `attendance.retry`.
+
+- `GET /api/v1/attendance/config` — policy, camera choices, and eligible user types.
+- `PUT /api/v1/attendance/config` — replace the complete timing/camera policy.
+- `GET /api/v1/attendance/dashboard?date=YYYY-MM-DD` — daily IN/OUT states and counts.
+- `GET /api/v1/attendance/observations?date=YYYY-MM-DD&limit=100` — throttled recognition decision audit.
+- `GET /api/v1/attendance/queue?status=FAILED&limit=100` — durable Mednet outbox.
+- `GET /api/v1/attendance/queue/{id}/attempts` — immutable HTTP attempt audit.
+- `POST /api/v1/attendance/queue/{id}/retry` — reschedule, never send inline.
+
+The policy uses `HH:MM` same-day windows in an IANA timezone. Every enabled
+attendance camera must have a Mednet serial number. Keep `shadow_mode=true`
+during rollout to record decisions without creating outbound punches. See
+[ATTENDANCE_INTEGRATION.md](ATTENDANCE_INTEGRATION.md) for invariants and
+failure behavior.

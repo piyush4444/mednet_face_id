@@ -8,6 +8,13 @@ rationale.
 
 ## 2026-08-19
 
+### `<unreleased>` — feat(attendance): add resilient Mednet punch integration
+
+- Added database-managed IN/OUT timing and camera policy with disabled-by-default shadow mode.
+- Stable recognition now records throttled decision observations and creates at most one IN and OUT per eligible user/day without calling Mednet from the camera process.
+- Added an ordered transactional outbox, exponential retries, circuit breaker, idempotent punch IDs, immutable delivery-attempt audit, and manual rescheduling.
+- Added RBAC-protected Attendance APIs and frontend administration/dashboard module.
+
 ### `<unreleased>` — refactor(kiosk): shelve the kiosk module
 
 - Preserved the complete implementation on `feature/kiosk-module` at commit `a40881e` for future development.

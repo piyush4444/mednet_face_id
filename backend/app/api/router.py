@@ -22,6 +22,7 @@ from backend.app.api.routes import (
     accounts, audit, auth, health, recognize, register, users, patients,
     tracking, ws, stream, history, metrics, metrics_clients, cameras,
     frontdesk, frontdesk_admin, facility, locations, integrations,
+    attendance,
 )
 from backend.app.core.deps import require_permission, verify_csrf
 from backend.app.db.auth_models import Permission as P
@@ -80,3 +81,4 @@ router.include_router(
 router.include_router(facility.router, dependencies=_guard(P.LOCATIONS_MANAGE))
 router.include_router(locations.router, dependencies=_guard(P.LOCATIONS_MANAGE))
 router.include_router(integrations.router, dependencies=_guard(P.INTEGRATIONS_MANAGE))
+router.include_router(attendance.router, dependencies=_guard(P.ATTENDANCE_READ))

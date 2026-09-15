@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import timedelta
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
+from sqlalchemy.orm import aliased
 
 from backend.app.core.config import settings
 from backend.app.db.facility_models import (
@@ -39,6 +41,7 @@ from backend.app.db.facility_models import (
     PreRegistrationLog,
     PunchExport,
 )
+from backend.app.db.attendance_models import PunchDeliveryAttempt
 from backend.app.db.postgres import SessionLocal
 from backend.app.services import client_api
 from backend.app.utils.time_ist import now_ist
@@ -48,6 +51,8 @@ logger = logging.getLogger("backend.export_worker")
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
 _wake = threading.Event()
+_punch_failures = 0
+_punch_open_until = 0.0
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────
@@ -167,23 +172,91 @@ def _due_ids(db, model) -> list[int]:
     return [r[0] for r in rows]
 
 
+def _due_punch_ids(db) -> list[int]:
+    """Return due punches whose prerequisite punch has been delivered."""
+    now = now_ist()
+    dependency = aliased(PunchExport)
+    rows = (
+        db.query(PunchExport.id)
+        .outerjoin(dependency, PunchExport.depends_on_id == dependency.id)
+        .filter(
+            PunchExport.status.in_([
+                ExportStatus.PENDING.value,
+                ExportStatus.FAILED.value,
+            ]),
+            PunchExport.attempts < settings.EXPORT_MAX_ATTEMPTS,
+            or_(PunchExport.next_retry_at.is_(None), PunchExport.next_retry_at <= now),
+            or_(
+                PunchExport.depends_on_id.is_(None),
+                dependency.status == ExportStatus.SENT.value,
+            ),
+        )
+        .order_by(PunchExport.created_at.asc())
+        .limit(settings.EXPORT_BATCH_SIZE)
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
 def _sweep_punches(db, counts: dict) -> None:
-    for row_id in _due_ids(db, PunchExport):
+    global _punch_failures, _punch_open_until
+
+    if time.monotonic() < _punch_open_until:
+        return
+
+    for row_id in _due_punch_ids(db):
         if not _claim(db, PunchExport, row_id):
             continue
         row = db.query(PunchExport).filter(PunchExport.id == row_id).first()
         if row is None:
             continue
+        attempted_at = now_ist()
+        last_attempt = db.query(func.max(PunchDeliveryAttempt.attempt_number)).filter(
+            PunchDeliveryAttempt.export_id == row.id
+        ).scalar() or 0
+        attempt_number = last_attempt + 1
+        attempt = PunchDeliveryAttempt(
+            export_id=row.id,
+            attempt_number=attempt_number,
+            attempted_at=attempted_at,
+            outcome="STARTED",
+        )
+        db.add(attempt)
+        db.commit()
         result = client_api.push_punch(row.payload)
+        row.response_status = result.status_code
+        row.response_payload = result.data
+        row.last_latency_ms = result.latency_ms
+        attempt.completed_at = now_ist()
+        attempt.outcome = "SENT" if result.ok else "FAILED"
+        attempt.http_status = result.status_code
+        attempt.latency_ms = result.latency_ms
+        attempt.error_category = result.error_category
+        attempt.error_detail = (result.error or "")[:1000] or None
+        attempt.response_payload = result.data
         if result.ok:
             row.status = ExportStatus.SENT.value
+            row.attempts = attempt_number
             row.sent_at = now_ist()
             row.last_error = None
+            row.next_retry_at = None
+            _punch_failures = 0
             counts["punch_sent"] += 1
         else:
             _mark_failed(row, result.error)
+            _punch_failures += 1
             counts["punch_failed"] += 1
         db.commit()
+        if _punch_failures >= settings.PUNCH_CIRCUIT_FAILURE_THRESHOLD:
+            _punch_open_until = (
+                time.monotonic() + settings.PUNCH_CIRCUIT_COOLDOWN_SECONDS
+            )
+            logger.warning(
+                "Punch delivery circuit open for %ss after %s failures",
+                settings.PUNCH_CIRCUIT_COOLDOWN_SECONDS,
+                _punch_failures,
+            )
+            break
 
 
 def _sweep_preregs(db, counts: dict) -> None:

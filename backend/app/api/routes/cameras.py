@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from backend.app.core.deps import get_optional_account
+from backend.app.db.attendance_models import AttendancePolicy
 from backend.app.db.postgres import get_db
 from backend.app.schemas.cameras import (
     CameraCreate,
@@ -162,7 +163,11 @@ async def delete_camera(
     account=Depends(get_optional_account),
     db: Session = Depends(get_db),
 ):
-    reg = _ensure_ready()
+    # Deletion must remain available when capture workers are intentionally
+    # disabled (for example, API-only maintenance mode). ``remove_camera``
+    # safely no-ops its runtime cleanup when the registry was not initialised
+    # and still deletes the PostgreSQL roster row.
+    reg = get_registry()
     try:
         await reg.remove_camera(camera_id)
     except KeyError:
@@ -170,6 +175,20 @@ async def delete_camera(
     except Exception as exc:
         logger.exception("delete_camera failed id=%s", camera_id)
         raise HTTPException(status_code=500, detail=f"delete failed: {exc}") from exc
+
+    # Avoid leaving an unusable attendance policy after a roster cleanup.
+    policy = db.get(AttendancePolicy, 1)
+    if policy is not None:
+        selected = list(policy.attendance_camera_ids or [])
+        serials = dict(policy.camera_serial_numbers or {})
+        if camera_id in selected or camera_id in serials:
+            policy.attendance_camera_ids = [
+                value for value in selected if value != camera_id
+            ]
+            serials.pop(camera_id, None)
+            policy.camera_serial_numbers = serials
+            policy.version = (policy.version or 0) + 1
+            db.commit()
     audit_service.record(
         db, action="camera.delete", actor=account, ip=_client_ip(request),
         target_type="camera", target_id=camera_id,

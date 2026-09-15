@@ -174,6 +174,7 @@ def init_db() -> None:
     from backend.app.db import frontdesk_models  # noqa: F401
     from backend.app.db import auth_models  # noqa: F401  (credentials/service accounts)
     from backend.app.db import audit_models  # noqa: F401  (audit_log)
+    from backend.app.db import attendance_models  # noqa: F401
     # Global role/permission catalog and canonical-user mappings.
     from backend.app.db import identity_models  # noqa: F401
 
@@ -480,6 +481,44 @@ def init_db() -> None:
                     "ALTER TABLE camera_master ADD COLUMN role "
                     "VARCHAR(10) NOT NULL DEFAULT 'inside'"
                 ))
+
+    # Attendance outbox extensions. Existing deployments may already have
+    # the kiosk-era punch queue; preserve its rows and add the fields needed
+    # for per-user/day decisions, ordering, and delivery audit.
+    if inspector.has_table("punch_export_sync"):
+        punch_columns = {
+            col["name"] for col in inspector.get_columns("punch_export_sync")
+        }
+        additions = {
+            "user_id": "INTEGER REFERENCES users(id) ON DELETE CASCADE",
+            "attendance_date": "DATE",
+            "direction": "VARCHAR(3)",
+            "camera_id": "VARCHAR(50)",
+            "depends_on_id": (
+                "INTEGER REFERENCES punch_export_sync(id) ON DELETE SET NULL"
+            ),
+            "policy_version": "INTEGER",
+            "response_status": "INTEGER",
+            "response_payload": "JSONB",
+            "last_latency_ms": "INTEGER",
+        }
+        with engine.begin() as conn:
+            for column_name, ddl in additions.items():
+                if column_name not in punch_columns:
+                    conn.execute(text(
+                        f"ALTER TABLE punch_export_sync "
+                        f"ADD COLUMN {column_name} {ddl}"
+                    ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_punch_user_date "
+                "ON punch_export_sync (user_id, attendance_date)"
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_punch_user_date_direction "
+                "ON punch_export_sync (user_id, attendance_date, direction) "
+                "WHERE user_id IS NOT NULL AND attendance_date IS NOT NULL "
+                "AND direction IS NOT NULL"
+            ))
 
     # B2B restructure, Phase 3: retry bookkeeping on pre_registration_log.
     # New columns on a table that P1 may already have created without them.

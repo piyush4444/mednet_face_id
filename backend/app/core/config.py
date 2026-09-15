@@ -115,6 +115,8 @@ class Settings(BaseSettings):
     EXPORT_BACKOFF_CAP: float = 3600.0     # max retry delay
     EXPORT_BATCH_SIZE: int = 20            # rows processed per sweep per queue
     EXPORT_STALE_SECONDS: float = 120.0    # reclaim a stuck SENDING row after
+    PUNCH_CIRCUIT_FAILURE_THRESHOLD: int = 5
+    PUNCH_CIRCUIT_COOLDOWN_SECONDS: float = 60.0
 
     # ── Recognition ──────────────────────────────────────────────────────
     SIMILARITY_THRESHOLD: float = 0.45

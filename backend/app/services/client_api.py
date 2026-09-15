@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -40,6 +41,8 @@ class ClientResult:
     status_code: Optional[int] = None
     data: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    error_category: Optional[str] = None
+    latency_ms: Optional[int] = None
     # Convenience fields pulled out of a pre-registration response.
     token_no: Optional[str] = None
     pre_regn_id: Optional[int] = None
@@ -76,6 +79,10 @@ def _post_json(url: str, api_key: str, payload: Any) -> ClientResult:
     headers.update(_auth_headers(api_key))
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 
+    started = time.perf_counter()
+
+    def elapsed() -> int:
+        return int((time.perf_counter() - started) * 1000)
     try:
         with urllib.request.urlopen(req, timeout=settings.CLIENT_API_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
@@ -86,8 +93,15 @@ def _post_json(url: str, api_key: str, payload: Any) -> ClientResult:
                 return ClientResult(
                     ok=False, status_code=status, data=data,
                     error=str(data.get("message") or "client reported success=false"),
+                    error_category="application",
+                    latency_ms=elapsed(),
                 )
-            return ClientResult(ok=True, status_code=status, data=data if isinstance(data, dict) else None)
+            return ClientResult(
+                ok=True,
+                status_code=status,
+                data=data if isinstance(data, dict) else None,
+                latency_ms=elapsed(),
+            )
     except urllib.error.HTTPError as exc:
         raw = ""
         try:
@@ -97,11 +111,23 @@ def _post_json(url: str, api_key: str, payload: Any) -> ClientResult:
         return ClientResult(
             ok=False, status_code=exc.code, data=_safe_json(raw) if raw else None,
             error=f"HTTP {exc.code}: {raw[:300]}" if raw else f"HTTP {exc.code}",
+            error_category="http",
+            latency_ms=elapsed(),
         )
     except urllib.error.URLError as exc:
-        return ClientResult(ok=False, error=f"connection error: {exc.reason}")
+        return ClientResult(
+            ok=False,
+            error=f"connection error: {exc.reason}",
+            error_category="network",
+            latency_ms=elapsed(),
+        )
     except Exception as exc:  # pragma: no cover — defensive
-        return ClientResult(ok=False, error=f"unexpected error: {exc}")
+        return ClientResult(
+            ok=False,
+            error=f"unexpected error: {exc}",
+            error_category="unexpected",
+            latency_ms=elapsed(),
+        )
 
 
 def _safe_json(raw: str) -> Any:
@@ -114,14 +140,14 @@ def _safe_json(raw: str) -> Any:
 
 
 def push_punch(payload: Dict[str, Any]) -> ClientResult:
-    """Send ONE punch to the client attendance API (their array-of-one
-    device-emulation contract). Idempotent on their side via
+    """Send one punch object using the current Mednet Postman contract.
+
+    Idempotent on their side via
     ``biometricIDX``, so a retry after an ambiguous failure is safe."""
     url = settings.CLIENT_PUNCH_API_URL.strip()
     if not url:
         return ClientResult(ok=False, error="punch API disabled (no URL)")
-    # The client expects a JSON array even for a single punch.
-    return _post_json(url, settings.CLIENT_PUNCH_API_KEY, [payload])
+    return _post_json(url, settings.CLIENT_PUNCH_API_KEY, payload)
 
 
 def push_prereg(payload: Dict[str, Any]) -> ClientResult:

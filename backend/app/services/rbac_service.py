@@ -43,6 +43,7 @@ def sync_catalog(db: Session) -> None:
     """
     # ── Permissions ───────────────────────────────────────────────
     perm_by_code = {p.code: p for p in db.query(PermissionMaster).all()}
+    new_permission_codes: set[str] = set()
     for perm in Permission:
         if perm.value not in perm_by_code:
             row = PermissionMaster(
@@ -51,6 +52,7 @@ def sync_catalog(db: Session) -> None:
             )
             db.add(row)
             perm_by_code[perm.value] = row
+            new_permission_codes.add(perm.value)
 
     # ── Roles ─────────────────────────────────────────────────────
     role_by_code = {r.code: r for r in db.query(RoleMaster).all()}
@@ -64,6 +66,29 @@ def sync_catalog(db: Session) -> None:
             role_by_code[role.value] = row
 
     db.flush()  # assign ids to freshly added rows before mapping
+
+    # Newly introduced admin capabilities must also reach existing role
+    # catalogs; the normal first-time bundle seed intentionally skips roles
+    # that operators may already have customised.
+    for role in (Role.ADMIN, Role.SUPER_ADMIN):
+        role_row = role_by_code[role.value]
+        for perm in (
+            Permission.ATTENDANCE_READ,
+            Permission.ATTENDANCE_MANAGE,
+            Permission.ATTENDANCE_RETRY,
+        ):
+            if perm.value not in new_permission_codes:
+                continue
+            permission_row = perm_by_code[perm.value]
+            exists = db.query(RolePermissionMapping).filter(
+                RolePermissionMapping.role_id == role_row.id,
+                RolePermissionMapping.permission_id == permission_row.id,
+            ).first()
+            if exists is None:
+                db.add(RolePermissionMapping(
+                    role_id=role_row.id,
+                    permission_id=permission_row.id,
+                ))
 
     # One-time vocabulary rename for the single-facility product. Preserve
     # whichever roles previously held facilities.manage, then retire it.

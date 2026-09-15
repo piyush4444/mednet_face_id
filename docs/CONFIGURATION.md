@@ -75,6 +75,8 @@ your shell or a `.env` file at the project root.
 | `EXPORT_BACKOFF_CAP`      | `3600`                                        | Maximum retry delay (seconds). |
 | `EXPORT_BATCH_SIZE`       | `20`                                          | Rows processed per queue per sweep. |
 | `EXPORT_STALE_SECONDS`    | `120`                                         | Reclaim a row stuck in `SENDING` (crash mid-send) back to `PENDING` after this. |
+| `PUNCH_CIRCUIT_FAILURE_THRESHOLD` | `5`                                  | Consecutive punch failures before delivery pauses. |
+| `PUNCH_CIRCUIT_COOLDOWN_SECONDS` | `60`                                    | Pause before one punch is tried again after the circuit opens. |
 | `OPENCV_FFMPEG_CAPTURE_OPTIONS` | `rtsp_transport;udp\|stimeout;5000000\|fflags;nobuffer\|flags;low_delay\|max_delay;500000` | RTSP transport + socket timeout + low-delay decoder hints. `run_backend.py` sets this. UDP is default because TCP head-of-line blocking causes stale-frame stalls on Tailscale/WireGuard tunnels; switch to `;tcp` for straight-LAN cameras where retransmits are cheap. |
 
 Frontend-side — Vite reads env files in this precedence: `.env.local` → `.env.production` (production builds) / `.env.development` (dev) → `.env`. The included `frontend/.env.production` uses the same-origin path `/api/v1`. Local dev uses `frontend/.env` (gitignored) or `frontend/.env.local`.

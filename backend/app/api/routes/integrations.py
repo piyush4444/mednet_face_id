@@ -28,6 +28,7 @@ from backend.app.db.facility_models import (
     PunchExport,
 )
 from backend.app.db.postgres import get_db
+from backend.app.core.config import settings
 from backend.app.services import client_api, export_worker
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -69,7 +70,11 @@ def _reset_for_retry(db: Session, model, row_id: int):
     if row.status == ExportStatus.SENT.value:
         raise HTTPException(status_code=409, detail="already sent")
     row.status = ExportStatus.PENDING.value
-    row.attempts = 0
+    row.attempts = (
+        min(row.attempts or 0, max(0, settings.EXPORT_MAX_ATTEMPTS - 1))
+        if model is PunchExport
+        else 0
+    )
     row.next_retry_at = None
     row.last_error = None
     db.commit()

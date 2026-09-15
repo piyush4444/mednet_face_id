@@ -21,8 +21,12 @@ patients across multiple cameras and runs an OPD front-desk workflow
 - **Unified identity and RBAC** — employees/doctors may receive login access
   on their existing recognized user record. Roles and permission overrides
   are database-backed.
-- **Settings hub** — manage rooms, departments, doctors, cameras and
-  registered patients from a single `/settings` page.
+- **Recognition-based attendance** — configurable IN/OUT windows create
+  ordered Mednet punches for eligible employees and doctors. A durable queue,
+  shadow mode, retries, circuit breaker, and immutable attempts protect the
+  live camera pipeline from external API failures.
+- **Administration** — manage locations, rooms, cameras, attendance policy,
+  users, and access from dedicated RBAC-protected modules.
 
 ## Tech stack
 

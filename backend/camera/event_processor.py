@@ -17,6 +17,7 @@ from backend.camera.ws_throttle import WSThrottle
 
 EXIT_TIMEOUT = 3.0  # seconds without a detection → EXIT (per-camera, legacy)
 UPDATE_INTERVAL = 1.0  # min seconds between UPDATE broadcasts per user
+ATTENDANCE_CHECK_INTERVAL = 5.0  # DB decision checks; local logs throttle further
 GLOBAL_TIMEOUT = 10  # seconds (you can tune later)
 
 # If strict mode (has_exit_camera()) prevents an exit because the user was
@@ -53,6 +54,9 @@ class EventProcessor(Process):
         self.camera_state: dict = {}
         # { camera_id: { user_id: last_update_sent_ts } }
         self.last_update_sent: dict = {}
+        # {(camera_id, user_id): monotonic epoch}; prevents a DB query per
+        # video frame while still evaluating punch-window boundaries quickly.
+        self.last_attendance_checked: dict = {}
         # { user_id } — users with an open session; gates re-entry
         self.active_sessions: set = set()
         # One-cycle immunity for sessions restored from DB — prevents an
@@ -241,6 +245,28 @@ class EventProcessor(Process):
             self._trackers[camera_id] = tracker
         return tracker
 
+    def _observe_attendance(self, camera_id, user_id, face, now):
+        key = (camera_id, user_id)
+        if now - self.last_attendance_checked.get(key, 0) < ATTENDANCE_CHECK_INTERVAL:
+            return
+        self.last_attendance_checked[key] = now
+        try:
+            from backend.app.services import attendance_service
+
+            with self._get_db() as db:
+                attendance_service.observe_recognition(
+                    db,
+                    user_id=int(user_id),
+                    camera_id=camera_id,
+                    confidence=face.get("identity_confidence"),
+                )
+        except Exception as exc:
+            # Attendance must never interrupt recognition, overlays, or local
+            # presence tracking. Its outbox/audit path reports failures later.
+            print(
+                f"[ATTENDANCE ERROR] user={user_id} camera={camera_id} {exc}"
+            )
+
     def handle_event(self, event):
         now = time.time()
         camera_id = event["camera_id"]
@@ -281,6 +307,8 @@ class EventProcessor(Process):
 
             if not user_id or not name or name == "Unknown":
                 continue
+
+            self._observe_attendance(camera_id, user_id, face, now)
 
             if user_id not in GLOBAL_PRESENCE:
                 GLOBAL_PRESENCE[user_id] = {
