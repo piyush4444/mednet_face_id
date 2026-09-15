@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: office-test-deployment
@@ -54,7 +53,7 @@ jobs:
 
   deploy:
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, office, mednet]
     environment: office-testing
     steps:
       - name: Check out requested revision
@@ -67,45 +66,23 @@ jobs:
         id: release
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Connect runner to the tailnet
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ secrets.TS_AUDIENCE }}
-          tags: tag:ci
-          ping: ${{ vars.OFFICE_SSH_HOST }}
-
-      - name: Configure deployment SSH identity
+      - name: Package and deploy release locally
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.OFFICE_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.OFFICE_SSH_KNOWN_HOSTS }}
+          DEPLOY_ROOT: ${{ vars.OFFICE_DEPLOY_ROOT }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          release_dir="$DEPLOY_ROOT/releases/$RELEASE_SHA"
+          release_archive="$release_dir/release.tgz"
 
-      - name: Package release
-        run: |
+          mkdir -p "$release_dir"
           tar \
             --exclude=.git \
             --exclude=frontend/node_modules \
             --exclude=frontend/dist \
             --exclude=database \
             --exclude=MEDNET_API \
-            -czf "release-${{ steps.release.outputs.sha }}.tgz" .
-
-      - name: Upload and deploy release
-        env:
-          DEPLOY_HOST: ${{ vars.OFFICE_SSH_HOST }}
-          DEPLOY_USER: ${{ vars.OFFICE_SSH_USER }}
-          DEPLOY_ROOT: ${{ vars.OFFICE_DEPLOY_ROOT }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
-        run: |
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p '$DEPLOY_ROOT/releases/$RELEASE_SHA'"
-          scp "release-$RELEASE_SHA.tgz" \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/releases/$RELEASE_SHA/release.tgz"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "tar -xzf '$DEPLOY_ROOT/releases/$RELEASE_SHA/release.tgz' -C '$DEPLOY_ROOT/releases/$RELEASE_SHA' && rm '$DEPLOY_ROOT/releases/$RELEASE_SHA/release.tgz' && chmod 700 '$DEPLOY_ROOT/releases/$RELEASE_SHA/deploy/server-deploy.sh' && '$DEPLOY_ROOT/releases/$RELEASE_SHA/deploy/server-deploy.sh' '$RELEASE_SHA' '$DEPLOY_ROOT'"
+            -czf "$release_archive" .
+          tar -xzf "$release_archive" -C "$release_dir"
+          rm "$release_archive"
+          chmod 700 "$release_dir/deploy/server-deploy.sh"
+          "$release_dir/deploy/server-deploy.sh" "$RELEASE_SHA" "$DEPLOY_ROOT"

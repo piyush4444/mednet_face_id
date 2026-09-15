@@ -20,7 +20,8 @@ function deriveWsUrl(apiBase) {
     );
   }
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/v1/ws/live`;
+  const pathPrefix = apiBase.replace(/\/api\/v1\/?$/, "");
+  return `${proto}//${window.location.host}${pathPrefix}/api/v1/ws/live`;
 }
 const _WS_URL = deriveWsUrl(_apiBase);
 

@@ -107,11 +107,12 @@ function AuthedApp() {
 function App() {
   const mode = useThemeMode();
   const muiTheme = useMemo(() => getMuiTheme(mode), [mode]);
+  const routerBase = import.meta.env.BASE_URL.replace(/\/$/, "") || "/";
 
   return (
     <ThemeProvider theme={muiTheme}>
       <AuthProvider>
-        <BrowserRouter>
+        <BrowserRouter basename={routerBase}>
           <ToastContainer
             position="bottom-right"
             autoClose={3000}

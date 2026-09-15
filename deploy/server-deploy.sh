@@ -41,12 +41,6 @@ compose=(
   -f "$compose_file"
 )
 
-enable_funnel="$(sed -n 's/^ENABLE_FUNNEL=//p' "$stack_env" | tail -n 1 | tr '[:upper:]' '[:lower:]')"
-profile_args=()
-if [[ "$enable_funnel" == "true" ]]; then
-  profile_args=(--profile funnel)
-fi
-
 rollback() {
   exit_code=$?
   if (( exit_code == 0 )) || [[ -z "$previous_release" || ! -f "$previous_release/deploy/compose.yaml" ]]; then
@@ -59,7 +53,7 @@ rollback() {
     --env-file "$stack_env" \
     --project-directory "$previous_release" \
     -f "$previous_release/deploy/compose.yaml" \
-    "${profile_args[@]}" up -d --wait --wait-timeout 600 || true
+    up -d --wait --wait-timeout 600 || true
   return "$exit_code"
 }
 trap rollback EXIT
@@ -74,7 +68,7 @@ fi
 "${compose[@]}" build --pull backend web
 "${compose[@]}" up -d --wait --wait-timeout 600 postgres
 "${compose[@]}" run --rm backend python -m backend.scripts.seed_initial
-"${compose[@]}" "${profile_args[@]}" up -d --wait --wait-timeout 900
+"${compose[@]}" up -d --wait --wait-timeout 900
 
 web_port="$(sed -n 's/^WEB_PORT=//p' "$stack_env" | tail -n 1)"
 web_port="${web_port:-8083}"

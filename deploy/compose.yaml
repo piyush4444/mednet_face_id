@@ -40,6 +40,7 @@ services:
       GPU_DEVICE_ID: ${GPU_DEVICE_ID:--1}
       CPU_CORES: ${CPU_CORES:-6}
       MEDIA_DIR: /app/database/media
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
       FAISS_INDEX_PATH: /app/database/face_index.bin
       NAME_MAP_PATH: /app/database/name_map.json
       BOOTSTRAP_FACILITY_NAME: ${BOOTSTRAP_FACILITY_NAME:-Mednet}
@@ -69,31 +70,7 @@ services:
       backend:
         condition: service_healthy
 
-  tailscale:
-    image: tailscale/tailscale:v1.102.2
-    profiles: ["funnel"]
-    restart: unless-stopped
-    network_mode: service:web
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    environment:
-      TS_AUTHKEY: ${TAILSCALE_AUTHKEY:-}
-      TS_HOSTNAME: ${TAILSCALE_HOSTNAME:-mednet-test}
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_AUTH_ONCE: "true"
-      TS_SERVE_CONFIG: /config/serve.json
-    volumes:
-      - tailscale_state:/var/lib/tailscale
-      - ./deploy/tailscale:/config:ro
-    depends_on:
-      web:
-        condition: service_healthy
-
 volumes:
   postgres_data:
   face_data:
   insightface_models:
-  tailscale_state:
