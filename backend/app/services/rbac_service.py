@@ -130,6 +130,10 @@ def sync_catalog(db: Session) -> None:
         ServiceAccount.principal_type == "KIOSK"
     ).update({ServiceAccount.is_active: False}, synchronize_session=False)
 
+    # SessionLocal disables autoflush, so persist any migration mappings before
+    # deciding whether a role still needs its first-time default bundle.
+    db.flush()
+
     # ── Role → permission bundles (first-time seed per role only) ──
     for role in Role:
         role_row = role_by_code[role.value]
