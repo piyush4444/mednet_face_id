@@ -14,8 +14,8 @@ after success. On failure it attempts to restore the previous application images
 this does not undo database migrations. Secrets remain in `shared/stack.env`.
 Existing account passwords are preserved by the seed process.
 
-The `mednet-face-id.service` system service starts the last successful release
-at boot without fetching code or requiring GitHub access. Docker's
+The `mednet-face-id.service` system service starts the installed containers
+at boot without changing images, fetching code, or requiring GitHub access. Docker's
 `unless-stopped` policies recover exited containers. Docker and Tailscale must
 remain enabled. Funnel's saved background configuration restores the public route.
 A Docker healthcheck reports unhealthy containers but does not itself restart a
