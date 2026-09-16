@@ -67,6 +67,12 @@ def sync_catalog(db: Session) -> None:
 
     db.flush()  # assign ids to freshly added rows before mapping
 
+    # Capture existing bundles before migrations add individual permissions.
+    # A fresh role must still receive its full defaults after those additions.
+    configured_role_ids = {
+        role_id for (role_id,) in db.query(RolePermissionMapping.role_id).distinct()
+    }
+
     # Newly introduced admin capabilities must also reach existing role
     # catalogs; the normal first-time bundle seed intentionally skips roles
     # that operators may already have customised.
@@ -130,21 +136,23 @@ def sync_catalog(db: Session) -> None:
         ServiceAccount.principal_type == "KIOSK"
     ).update({ServiceAccount.is_active: False}, synchronize_session=False)
 
-    # SessionLocal disables autoflush, so persist any migration mappings before
-    # deciding whether a role still needs its first-time default bundle.
+    # SessionLocal disables autoflush; make migration mappings visible so the
+    # initial bundle does not insert duplicate role/permission pairs.
     db.flush()
 
     # ── Role → permission bundles (first-time seed per role only) ──
     for role in Role:
         role_row = role_by_code[role.value]
-        already = (
-            db.query(RolePermissionMapping)
-            .filter(RolePermissionMapping.role_id == role_row.id)
-            .count()
-        )
-        if already:
+        if role_row.id in configured_role_ids:
             continue  # operator may have customised this bundle — leave it
+        existing_permission_ids = {
+            permission_id for (permission_id,) in db.query(
+                RolePermissionMapping.permission_id
+            ).filter(RolePermissionMapping.role_id == role_row.id)
+        }
         for perm in ROLE_DEFAULTS.get(role, frozenset()):
+            if perm_by_code[perm.value].id in existing_permission_ids:
+                continue
             db.add(
                 RolePermissionMapping(
                     role_id=role_row.id,

@@ -1,0 +1,22 @@
+[Unit]
+Description=Mednet Face ID office deployment
+Requires=docker.service
+Wants=network-online.target tailscaled.service
+After=network-online.target docker.service tailscaled.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=pg
+Group=pg
+SupplementaryGroups=docker
+WorkingDirectory=/home/pg/apps/mednet-face-id
+ExecStart=/bin/bash /home/pg/apps/mednet-face-id/start.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=3000
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
